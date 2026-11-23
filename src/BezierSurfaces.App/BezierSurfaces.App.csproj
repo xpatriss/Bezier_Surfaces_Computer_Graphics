@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\BezierSurfaces.Core\BezierSurfaces.Core.csproj" />
+    <Content Include="..\..\data\surfaces.txt" Link="data\surfaces.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <PropertyGroup>
