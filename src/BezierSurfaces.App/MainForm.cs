@@ -1,6 +1,7 @@
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Numerics;
+using BezierSurfaces.Core.Bezier;
 using BezierSurfaces.Core.Files;
 using BezierSurfaces.Core.Geometry;
 using BezierSurfaces.Core.Lighting;
@@ -17,8 +18,11 @@ public sealed class MainForm : Form
     private readonly PictureBox _drawing = new SmoothCanvas();
     private readonly EdgeBucketRasterizer _rasterizer = new(800);
     private readonly FrameBuffer _frame = new();
+    private readonly System.Windows.Forms.Timer _clock = new();
     private Bitmap? _bitmap;
     private bool _turning;
+    private bool _draggingLight;
+    private int _lightPointIndex = -1;
     private Point _lastMouse;
     private readonly CheckBox _polygonsBox = new() { Text = "Wielobok kontrolny", Checked = true };
     private readonly CheckBox _meshBox = new() { Text = "Siatka trójkątów", Checked = true };
@@ -38,6 +42,9 @@ public sealed class MainForm : Form
     private readonly TrackBar _diffuseBar = new() { Minimum = 0, Maximum = 100, Value = 75, TickStyle = TickStyle.None, AutoSize = true };
     private readonly TrackBar _specularBar = new() { Minimum = 0, Maximum = 100, Value = 35, TickStyle = TickStyle.None, AutoSize = true };
     private readonly TrackBar _shininessBar = new() { Minimum = 1, Maximum = 100, Value = 24, TickStyle = TickStyle.None, AutoSize = true };
+    private readonly TrackBar _lightZBar = new() { Minimum = -200, Maximum = 200, Value = 100, TickStyle = TickStyle.None, AutoSize = true };
+    private readonly Label _lightZLabel = new() { AutoSize = true };
+    private readonly CheckBox _animateBox = new() { Text = "Animuj światło" };
     private readonly Button _resetButton = new() { Text = "Widok z góry" };
 
     private static readonly Color PageColor = Color.White;
@@ -56,13 +63,18 @@ public sealed class MainForm : Form
         MinimumSize = new Size(860, 520);
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Font;
+        KeyPreview = true;
 
         BuildLayout();
         LoadSurfaces();
         _scene.Divisions = _divisionsBar.Value;
         ApplyShadingFromUi();
+        ApplyLightZFromUi();
         _scene.RebuildMesh();
         RefreshDivisionLabel();
+        _clock.Interval = 30;
+        _clock.Tick += (_, _) => AdvanceLight();
+        KeyDown += OnKeyDown;
     }
 
     /// układa biały obszar rysowania i szary panel, jak w edytorze wielokątów
@@ -107,14 +119,18 @@ public sealed class MainForm : Form
         _specularLabel.BackColor = PanelColor;
         _shininessLabel.ForeColor = MutedColor;
         _shininessLabel.BackColor = PanelColor;
+        _lightZLabel.ForeColor = MutedColor;
+        _lightZLabel.BackColor = PanelColor;
         _divisionsBar.BackColor = PanelColor;
         _divisionsBar.AutoSize = true;
         _diffuseBar.BackColor = PanelColor;
         _specularBar.BackColor = PanelColor;
         _shininessBar.BackColor = PanelColor;
+        _lightZBar.BackColor = PanelColor;
         StyleOption(_polygonsBox);
         StyleOption(_meshBox);
         StyleOption(_filledBox);
+        StyleOption(_animateBox);
         _resetButton.Font = Font;
         _resetButton.FlatStyle = FlatStyle.Flat;
         _resetButton.BackColor = PageColor;
@@ -125,7 +141,7 @@ public sealed class MainForm : Form
         _resetButton.FlatAppearance.BorderColor = LineColor;
         _resetButton.FlatAppearance.BorderSize = 1;
 
-        var hint = Hint("Lewy przycisk przechyla. Prawy kręci w płaszczyźnie ekranu.");
+        var hint = Hint("Lewy przycisk przechyla. Prawy kręci w płaszczyźnie ekranu. Pomarańczowe punkty da się ciągnąć. Spacja włącza animację.");
         AddRow(stack, Heading("Dokładność siatki"));
         AddRow(stack, _divisionsLabel);
         AddRow(stack, _divisionsBar);
@@ -142,6 +158,9 @@ public sealed class MainForm : Form
         AddRow(stack, _specularBar);
         AddRow(stack, _shininessLabel);
         AddRow(stack, _shininessBar);
+        AddRow(stack, _lightZLabel);
+        AddRow(stack, _lightZBar);
+        AddRow(stack, _animateBox);
         AddRow(stack, _resetButton);
         AddRow(stack, Rule());
         AddRow(stack, hint);
@@ -185,6 +204,12 @@ public sealed class MainForm : Form
             ApplyShadingFromUi();
             _drawing.Invalidate();
         };
+        _lightZBar.ValueChanged += (_, _) =>
+        {
+            ApplyLightZFromUi();
+            _drawing.Invalidate();
+        };
+        _animateBox.CheckedChanged += (_, _) => _clock.Enabled = _animateBox.Checked;
         _resetButton.Click += (_, _) =>
         {
             _scene.ReplaceOrientation(Matrix3.Identity);
@@ -283,6 +308,35 @@ public sealed class MainForm : Form
         _shininessLabel.Text = $"m: {_shininessBar.Value}";
     }
 
+    /// przesuwa całą krzywą światła na wysokość z suwaka
+    // suwak ma zakres −200…200, a scena liczy w jednostkach, stąd dzielenie przez 100
+    private void ApplyLightZFromUi()
+    {
+        _scene.LightPath.SetZ(_lightZBar.Value / 100f);
+        _lightZLabel.Text = $"z światła: {_scene.LightPath.Z:0.00}";
+    }
+
+    /// posuwa lampę wzdłuż krzywej i zawija parametr po pełnym obiegu
+    private void AdvanceLight()
+    {
+        _scene.LightParameter += 0.008f;
+        if (_scene.LightParameter > 1f)
+        {
+            _scene.LightParameter -= 1f;
+        }
+
+        _drawing.Invalidate();
+    }
+
+    /// spacja włącza i wyłącza animację lampy
+    private void OnKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.KeyCode == Keys.Space)
+        {
+            _animateBox.Checked = !_animateBox.Checked;
+        }
+    }
+
     /// wpisuje na pasek, na ile części podzielony jest przedział 0–1
     private void RefreshDivisionLabel()
     {
@@ -347,6 +401,8 @@ public sealed class MainForm : Form
                     ColorFor(index));
             }
         }
+
+        DrawLight(e.Graphics, map);
     }
 
     /// wypełnia trójkąty do bitmapy i kładzie ją pod liniami
@@ -355,7 +411,7 @@ public sealed class MainForm : Form
     {
         _frame.Resize(width, height);
         _frame.Clear(unchecked((int)0xFFFFFFFF));
-        _rasterizer.DrawMesh(_scene, map, _frame, _scene.LightPosition);
+        _rasterizer.DrawMesh(_scene, map, _frame, _scene.CurrentLightPosition);
         if (_bitmap is null || _bitmap.Width != width || _bitmap.Height != height)
         {
             _bitmap?.Dispose();
@@ -400,7 +456,34 @@ public sealed class MainForm : Form
         graphics.DrawLine(pen, map.CenterX, 0, map.CenterX, map.Height);
     }
 
-    /// zaczyna obrót, gdy lewy albo prawy przycisk idzie w dół
+    /// rysuje drogę światła, jej punkty kontrolne i samą lampę
+    // krzywa jest w układzie okna, więc nie mnożymy jej przez obrót bryły
+    private void DrawLight(Graphics graphics, ScreenMap map)
+    {
+        using var curvePen = new Pen(Color.DarkOrange, 2f);
+        using var handleBrush = new SolidBrush(Color.OrangeRed);
+        using var lampBrush = new SolidBrush(Color.Gold);
+        Vector2 previous = map.ToScreen(BezierCurve.Point(_scene.LightPath.Points, 0f));
+        const int samples = 80;
+        for (int i = 1; i <= samples; i++)
+        {
+            float t = i / (float)samples;
+            Vector2 next = map.ToScreen(BezierCurve.Point(_scene.LightPath.Points, t));
+            graphics.DrawLine(curvePen, previous.X, previous.Y, next.X, next.Y);
+            previous = next;
+        }
+
+        for (int i = 0; i < 6; i++)
+        {
+            Vector2 screen = map.ToScreen(_scene.LightPath.Points[i]);
+            graphics.FillRectangle(handleBrush, screen.X - 4f, screen.Y - 4f, 8f, 8f);
+        }
+
+        Vector2 lamp = map.ToScreen(_scene.CurrentLightPosition);
+        graphics.FillEllipse(lampBrush, lamp.X - 6f, lamp.Y - 6f, 12f, 12f);
+    }
+
+    /// zaczyna ciągnięcie punktu światła albo obrót sceny
     private void OnMouseDown(object? sender, MouseEventArgs e)
     {
         if (e.Button is not (MouseButtons.Left or MouseButtons.Right))
@@ -408,23 +491,40 @@ public sealed class MainForm : Form
             return;
         }
 
-        _turning = true;
         _lastMouse = e.Location;
-        _drawing.Capture = true;
-    }
-
-    /// dokłada mały obrót od przesunięcia myszy i odrysowuje scenę
-    private void OnMouseMove(object? sender, MouseEventArgs e)
-    {
-        if (!_turning)
+        ScreenMap map = ScreenMap.Fit(
+            Math.Max(1, _drawing.ClientSize.Width),
+            Math.Max(1, _drawing.ClientSize.Height));
+        _lightPointIndex = HitLightPoint(map, e.Location);
+        if (_lightPointIndex >= 0 && e.Button == MouseButtons.Left)
         {
+            _draggingLight = true;
+            _drawing.Capture = true;
             return;
         }
 
+        _turning = true;
+        _drawing.Capture = true;
+    }
+
+    /// przesuwa punkt krzywej albo dokłada mały obrót i odrysowuje scenę
+    private void OnMouseMove(object? sender, MouseEventArgs e)
+    {
         float dx = e.X - _lastMouse.X;
         float dy = e.Y - _lastMouse.Y;
         _lastMouse = e.Location;
-        if (dx == 0f && dy == 0f)
+        if (_draggingLight)
+        {
+            ScreenMap map = ScreenMap.Fit(
+                Math.Max(1, _drawing.ClientSize.Width),
+                Math.Max(1, _drawing.ClientSize.Height));
+            Vector3 view = map.ToView(e.X, e.Y, _scene.LightPath.Z);
+            _scene.LightPath.MoveXy(_lightPointIndex, view.X, view.Y);
+            _drawing.Invalidate();
+            return;
+        }
+
+        if (!_turning || (dx == 0f && dy == 0f))
         {
             return;
         }
@@ -438,11 +538,34 @@ public sealed class MainForm : Form
         _drawing.Invalidate();
     }
 
-    /// kończy obrót po puszczeniu przycisku
+    /// kończy obrót albo ciągnięcie punktu po puszczeniu przycisku
     private void EndTurn()
     {
         _turning = false;
+        _draggingLight = false;
+        _lightPointIndex = -1;
         _drawing.Capture = false;
+    }
+
+    /// szuka punktu kontrolnego światła pod kursorem, w promieniu 10 pikseli
+    private int HitLightPoint(ScreenMap map, Point cursor)
+    {
+        int found = -1;
+        float best = 10f * 10f;
+        for (int i = 0; i < 6; i++)
+        {
+            Vector2 screen = map.ToScreen(_scene.LightPath.Points[i]);
+            float dx = screen.X - cursor.X;
+            float dy = screen.Y - cursor.Y;
+            float distance = dx * dx + dy * dy;
+            if (distance <= best)
+            {
+                best = distance;
+                found = i;
+            }
+        }
+
+        return found;
     }
 
     /// łączy sąsiednie punkty kontrolne i zaznacza same punkty
@@ -525,6 +648,7 @@ public sealed class MainForm : Form
     /// zwalnia bitmapę wypełnienia razem z oknem
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
+        _clock.Dispose();
         _bitmap?.Dispose();
         base.OnFormClosed(e);
     }

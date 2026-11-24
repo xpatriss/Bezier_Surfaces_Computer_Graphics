@@ -1,4 +1,5 @@
 using System.Numerics;
+using BezierSurfaces.Core.Bezier;
 using BezierSurfaces.Core.Geometry;
 using BezierSurfaces.Core.Lighting;
 using BezierSurfaces.Core.Mesh;
@@ -16,8 +17,12 @@ public sealed class Scene
 
     public Matrix3 Orientation { get; private set; } = Matrix3.Identity;
 
-    // światło stoi w układzie obserwatora, obrót bryły go nie rusza
-    public Vector3 LightPosition { get; set; } = new(0.6f, 0.8f, 1.8f);
+    // krzywa zostaje w układzie obserwatora, obrót bryły jej nie rusza
+    public LightCurve LightPath { get; } = new();
+
+    public float LightParameter { get; set; }
+
+    public Vector3 CurrentLightPosition => BezierCurve.Point(LightPath.Points, LightParameter);
 
     public Vector3Color LightColor { get; set; } = new(1f, 1f, 1f);
 

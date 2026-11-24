@@ -41,4 +41,14 @@ public readonly struct ScreenMap
             CenterX + point.X * Scale,
             CenterY - point.Y * Scale);
     }
+
+    /// zamienia piksel z powrotem na punkt sceny o zadanym z
+    // y na ekranie rośnie w dół, w scenie w górę, stąd minus
+    public Vector3 ToView(float screenX, float screenY, float z)
+    {
+        return new Vector3(
+            (screenX - CenterX) / Scale,
+            (CenterY - screenY) / Scale,
+            z);
+    }
 }

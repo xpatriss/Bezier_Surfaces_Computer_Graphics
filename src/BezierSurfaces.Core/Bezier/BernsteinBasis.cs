@@ -25,4 +25,36 @@ public static class BernsteinBasis
         weights[1] = 2f * t * opposite;
         weights[2] = t * t;
     }
+
+    /// liczy jedną wagę bernsteina dla dowolnego stopnia
+    // krzywa światła ma stopień 6, więc cztery wagi płata tu nie wystarczą
+    public static float Weight(int index, int degree, float t)
+    {
+        float coefficient = Binomial(degree, index);
+        return coefficient * Pow(t, index) * Pow(1f - t, degree - index);
+    }
+
+    /// liczy symbol newtona n po k
+    private static float Binomial(int n, int k)
+    {
+        float value = 1f;
+        for (int i = 1; i <= k; i++)
+        {
+            value = value * (n - k + i) / i;
+        }
+
+        return value;
+    }
+
+    /// podnosi liczbę do całkowitej potęgi
+    // 0^0 zostaje 1, bo skrajny wyraz bazy bernsteina ma taką wartość
+    private static float Pow(float baseValue, int exponent)
+    {
+        if (exponent == 0)
+        {
+            return 1f;
+        }
+
+        return MathF.Pow(baseValue, exponent);
+    }
 }
