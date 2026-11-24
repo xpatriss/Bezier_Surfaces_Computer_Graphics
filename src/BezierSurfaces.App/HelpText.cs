@@ -6,17 +6,19 @@ static class HelpText
     public const string Body = """
         Instrukcja
 
-        Lewy przycisk w obszarze rysowania obraca scenę.
+        Lewy przycisk i przeciągnięcie w obszarze rysowania obraca scenę.
         Ruch w prawo kręci wokół pionowej osi ekranu (y).
         Ruch w górę albo w dół kręci wokół poziomej osi ekranu (x).
         Prawy przycisk kręci wokół osi prostopadłej do ekranu (z).
         Kąt nie jest obcinany. Każdy ruch dokłada się do aktualnej orientacji.
-        Przycisk „Widok z góry” wstawia macierz identyczności.
+        Zakładka „Widok” zawiera suwak podziału i trzy warstwy rysunku.
+        Przycisk „Widok z góry” ustawia orientację bez obrotu.
 
-        Punkty na pomarańczowej krzywej to punkty kontrolne światła.
-        Przeciągnięcie takiego punktu zmienia krzywą na płaszczyźnie stałego z.
+        Pomarańczowe uchwyty sterują torem lampy. Przeciągnij uchwyt lewym
+        przyciskiem, żeby zmienić krzywą na płaszczyźnie stałego z.
         Suwak z przesuwa całą krzywą. Pole „Animuj światło” rusza punkt po krzywej.
-        Kliknięcie powierzchni wybiera ją do ustawienia koloru albo tekstury.
+        Kliknięcie powierzchni wybiera ją w zakładce „Materiał”.
+        Można też wybrać powierzchnię z listy i ustawić osobny kolor lub obraz.
         Pole „Mapa normalnych” ugina normalną według obrazu, bez ruszania siatki.
 
         Skróty
@@ -25,13 +27,15 @@ static class HelpText
 
         Jak ruch myszy staje się obrotem
 
-        Orientacja sceny jest macierzą 3×3, nie trzema kątami.
-        Przy ruchu myszy liczymy tylko przyrost od poprzedniej pozycji kursora.
+        Orientacja sceny jest macierzą 3×3. Po ruchu o co najmniej 3 piksele
+        zaczynamy obrót od pozycji wciśnięcia. Dalej liczymy przyrost od
+        poprzedniej pozycji kursora.
         Lewy przycisk: alfa = dy * 0,01 radiana, beta = dx * 0,01 radiana.
         Przyrost to Rx(alfa) * Ry(beta).
         Prawy przycisk: gamma = dx * 0,01, przyrost to Rz(gamma).
         Nowa orientacja: Rnowa = Rprzyrost * Raktualna.
-        Następny ruch bierze już Rnowa, a nie pozycję z początku przeciągnięcia.
+        Po złożeniu przywracamy jednostkowe prostopadłe osie macierzy,
+        żeby kolejne obroty zachowywały długości. Następny ruch używa Rnowa.
 
         Punkty powierzchni mnożymy przez tę macierz wokół (0, 0, 0).
         Wektory styczne i normalne mnożymy tak samo, jako kierunki.
@@ -43,8 +47,10 @@ static class HelpText
 
         Kolor piksela
 
-        i = kd · il · io · max(n·l, 0) + ks · il · io · max(v·r, 0)^m
-        Nie ma składnika ambient. v = (0, 0, 1).
+        Rozproszenie jest proporcjonalne do |n·l|, więc działa po obu stronach.
+        Połysk liczymy po tej samej stronie płata co lampa, gdy v·r > 0.
+        Sumę składników mnożymy przez kolor światła i materiału dla każdego kanału.
+        Wszelkie nasycenie kanałów odbywa się przy konwersji do 0–255.
         Bliższy piksel wygrywa większym z.
         """;
 }

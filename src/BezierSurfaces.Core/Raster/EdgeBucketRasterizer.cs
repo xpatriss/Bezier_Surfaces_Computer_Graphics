@@ -31,25 +31,36 @@ public sealed class EdgeBucketRasterizer
     }
 
     /// wypełnia trójkąty kolorem licznym osobno w każdym pikselu
-    public void DrawMesh(Scene scene, ScreenMap map, FrameBuffer frame, Vector3 lightPosition)
+    public void DrawMesh(
+        Scene scene,
+        ScreenMap map,
+        FrameBuffer frame,
+        Vector3 lightPosition,
+        ReadOnlySpan<Vector3Color> wireColors = default)
     {
         EnsureHeight(frame.Height);
         var shader = new FragmentShader { Scene = scene, LightPosition = lightPosition };
         foreach (MeshTriangle triangle in scene.Mesh.Triangles)
         {
-            DrawTriangle(triangle, map, frame, shader);
+            Vector3Color? wireColor = wireColors.IsEmpty ? null : wireColors[triangle.SurfaceIndex % wireColors.Length];
+            DrawTriangle(triangle, map, frame, shader, wireColor);
         }
     }
 
     /// wkłada trzy krawędzie do kubełków i maluje kolejne wiersze
-    public void DrawTriangle(MeshTriangle triangle, ScreenMap map, FrameBuffer frame, FragmentShader shader)
+    private void DrawTriangle(
+        MeshTriangle triangle,
+        ScreenMap map,
+        FrameBuffer frame,
+        FragmentShader shader,
+        Vector3Color? wireColor)
     {
         Vector2 a = map.ToScreen(triangle.A.PositionView);
         Vector2 b = map.ToScreen(triangle.B.PositionView);
         Vector2 c = map.ToScreen(triangle.C.PositionView);
-        float area = SignedArea(b, c, a);
+        double area = SignedArea(b, c, a.X, a.Y);
         // trzy punkty na jednej prostej nie mają wnętrza
-        if (MathF.Abs(area) < 1e-4f)
+        if (Math.Abs(area) < 1e-4)
         {
             return;
         }
@@ -76,21 +87,29 @@ public sealed class EdgeBucketRasterizer
             }
         }
 
+        double inverseArea = 1.0 / area;
+        float absoluteArea = (float)Math.Abs(area);
+        var wireHeights = wireColor.HasValue
+            ? new Vector3(absoluteArea / Vector2.Distance(b, c), absoluteArea / Vector2.Distance(c, a), absoluteArea / Vector2.Distance(a, b))
+            : Vector3.Zero;
         _active.Clear();
         for (int y = yMin; y < yMax; y++)
         {
-            if (y < frame.Height)
+            for (int i = _active.Count - 1; i >= 0; i--)
             {
-                _active.AddRange(_buckets[y]);
+                if (_active[i].YEnd <= y)
+                {
+                    _active.RemoveAt(i);
+                }
             }
 
-            // krawędź kończy się na swoim górnym wierszu i nie maluje go drugi raz
-            _active.RemoveAll(edge => edge.YEnd <= y);
+            _active.AddRange(_buckets[y]);
             _active.Sort(static (left, right) => left.X.CompareTo(right.X));
-            FillPairs(triangle, a, b, c, area, y, frame, shader);
-            foreach (ActiveEdge edge in _active)
+            FillPairs(triangle, a, b, c, inverseArea, y, frame, shader, wireColor, wireHeights);
+            for (int i = 0; i < _active.Count; i++)
             {
-                edge.X += edge.DxPerDy;
+                ActiveEdge edge = _active[i];
+                _active[i] = edge with { X = edge.X + edge.DxPerDy };
             }
         }
     }
@@ -101,45 +120,46 @@ public sealed class EdgeBucketRasterizer
         Vector2 a,
         Vector2 b,
         Vector2 c,
-        float area,
+        double inverseArea,
         int y,
         FrameBuffer frame,
-        FragmentShader shader)
+        FragmentShader shader,
+        Vector3Color? wireColor,
+        Vector3 wireHeights)
     {
         for (int pair = 0; pair + 1 < _active.Count; pair += 2)
         {
-            float left = _active[pair].X;
-            float right = _active[pair + 1].X;
-            if (right < left)
-            {
-                (left, right) = (right, left);
-            }
+            double left = _active[pair].X;
+            double right = _active[pair + 1].X;
+            // środek piksela może leżeć na lewej granicy, prawa należy do sąsiada
+            int x0 = (int)Math.Clamp(Math.Ceiling(left - 0.5), 0, frame.Width);
+            int xEnd = (int)Math.Clamp(Math.Ceiling(right - 0.5), 0, frame.Width);
 
-            // środek piksela ma leżeć między przecięciami
-            int x0 = (int)MathF.Ceiling(left - 0.5f);
-            int x1 = (int)MathF.Floor(right - 0.5f);
-            if (x0 < 0)
+            double sampleY = y + 0.5;
+            int index = y * frame.Width + x0;
+            for (int x = x0; x < xEnd; x++, index++)
             {
-                x0 = 0;
-            }
-
-            if (x1 >= frame.Width)
-            {
-                x1 = frame.Width - 1;
-            }
-
-            float sampleY = y + 0.5f;
-            for (int x = x0; x <= x1; x++)
-            {
-                float sampleX = x + 0.5f;
-                float alpha = SignedArea(b, c, sampleX, sampleY) / area;
-                float beta = SignedArea(c, a, sampleX, sampleY) / area;
+                double sampleX = x + 0.5;
+                float alpha = (float)(SignedArea(b, c, sampleX, sampleY) * inverseArea);
+                float beta = (float)(SignedArea(c, a, sampleX, sampleY) * inverseArea);
                 float gamma = 1f - alpha - beta;
                 float z =
                     alpha * triangle.A.PositionView.Z +
                     beta * triangle.B.PositionView.Z +
                     gamma * triangle.C.PositionView.Z;
-                frame.WriteIfCloser(x, y, z, LightingEquation.ToBgra(shader.Shade(triangle, alpha, beta, gamma)));
+                if (z > frame.Depth[index])
+                {
+                    Vector3Color color = shader.Shade(triangle, alpha, beta, gamma);
+                    if (wireColor is Vector3Color wire)
+                    {
+                        // waga barycentryczna razy wysokość to odległość od przeciwległej krawędzi
+                        float distance = MathF.Min(alpha * wireHeights.X, MathF.Min(beta * wireHeights.Y, gamma * wireHeights.Z));
+                        float opacity = 0.82f * Math.Clamp(1f - distance, 0f, 1f);
+                        color = (1f - opacity) * color + opacity * wire;
+                    }
+
+                    frame.WriteVisible(index, z, LightingEquation.ToBgra(color), triangle.SurfaceIndex);
+                }
             }
         }
     }
@@ -147,52 +167,25 @@ public sealed class EdgeBucketRasterizer
     /// wstawia krawędź do kubełka wiersza, na którym się zaczyna
     private void AddEdge(Vector2 start, Vector2 end, int height)
     {
-        Vector2 lower = start.Y <= end.Y ? start : end;
-        Vector2 upper = start.Y <= end.Y ? end : start;
-        float dy = upper.Y - lower.Y;
-        // pozioma krawędź nie przecina żadnego wiersza
-        if (dy < 1e-5f || height <= 0)
+        Vector2 top = start.Y <= end.Y ? start : end;
+        Vector2 bottom = start.Y <= end.Y ? end : start;
+        double dy = (double)bottom.Y - top.Y;
+        if (dy == 0)
         {
             return;
         }
 
-        int yStart = (int)MathF.Ceiling(lower.Y - 0.5f);
-        int yEnd = (int)MathF.Floor(upper.Y - 0.5f) + 1;
+        // górny koniec wliczamy, dolny pomijamy
+        int yStart = (int)Math.Clamp(Math.Ceiling(top.Y - 0.5), 0, height);
+        int yEnd = (int)Math.Clamp(Math.Ceiling(bottom.Y - 0.5), 0, height);
         if (yEnd <= yStart)
         {
             return;
         }
 
-        float dxPerDy = (upper.X - lower.X) / dy;
-        float x = lower.X + ((yStart + 0.5f) - lower.Y) * dxPerDy;
-        if (yStart < 0)
-        {
-            x += dxPerDy * -yStart;
-            yStart = 0;
-        }
-
-        if (yStart >= height)
-        {
-            return;
-        }
-
-        if (yEnd > height)
-        {
-            yEnd = height;
-        }
-
-        if (yEnd <= yStart)
-        {
-            return;
-        }
-
-        var edge = new ActiveEdge
-        {
-            YEnd = yEnd,
-            X = x,
-            DxPerDy = dxPerDy
-        };
-        _buckets[yStart].Add(edge);
+        double dxPerDy = ((double)bottom.X - top.X) / dy;
+        double x = top.X + (yStart + 0.5 - top.Y) * dxPerDy;
+        _buckets[yStart].Add(new ActiveEdge(yEnd, x, dxPerDy));
         _usedRows.Add(yStart);
     }
 
@@ -208,14 +201,9 @@ public sealed class EdgeBucketRasterizer
     }
 
     /// pole równoległoboku między bokiem a punktem, ze znakiem
-    private static float SignedArea(Vector2 start, Vector2 end, Vector2 point)
+    private static double SignedArea(Vector2 start, Vector2 end, double x, double y)
     {
-        return SignedArea(start, end, point.X, point.Y);
-    }
-
-    private static float SignedArea(Vector2 start, Vector2 end, float x, float y)
-    {
-        return (end.Y - start.Y) * (x - start.X) + (start.X - end.X) * (y - start.Y);
+        return ((double)end.Y - start.Y) * (x - start.X) + ((double)start.X - end.X) * (y - start.Y);
     }
 
     private static List<ActiveEdge>[] CreateBuckets(int height)
@@ -230,10 +218,5 @@ public sealed class EdgeBucketRasterizer
     }
 
     /// krawędź, która przecina aktualny wiersz
-    private sealed class ActiveEdge
-    {
-        public int YEnd;
-        public float X;
-        public float DxPerDy;
-    }
+    private readonly record struct ActiveEdge(int YEnd, double X, double DxPerDy);
 }

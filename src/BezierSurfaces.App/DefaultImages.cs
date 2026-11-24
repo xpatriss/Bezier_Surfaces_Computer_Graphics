@@ -42,9 +42,10 @@ static class DefaultImages
             {
                 float left = Height(x - 1, y);
                 float right = Height(x + 1, y);
-                float down = Height(x, y - 1);
-                float up = Height(x, y + 1);
-                var normal = Vector3.Normalize(new Vector3((left - right) * 4f, (down - up) * 4f, 1f));
+                float upper = Height(x, y - 1);
+                float lower = Height(x, y + 1);
+                // wiersze obrazu rosną w dół, parametr v rośnie w górę
+                var normal = Vector3.Normalize(new Vector3((left - right) * 4f, (lower - upper) * 4f, 1f));
                 Write(rgb, size, x, y, normal.X * 0.5f + 0.5f, normal.Y * 0.5f + 0.5f, normal.Z * 0.5f + 0.5f);
             }
         }

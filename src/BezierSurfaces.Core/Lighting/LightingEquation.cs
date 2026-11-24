@@ -3,10 +3,9 @@ using System.Numerics;
 namespace BezierSurfaces.Core.Lighting;
 
 /// liczy kolor piksela ze wzoru z polecenia, bez składnika ambient
-// i = kd il io max(n·l, 0) + ks il io max(v·r, 0)^m
 public static class LightingEquation
 {
-    // obserwator patrzy w dodatnie z, więc wektor do oka to (0, 0, 1)
+    // obserwator jest po stronie dodatniego z
     public static readonly Vector3 ViewDirection = new(0f, 0f, 1f);
 
     /// zwraca kolor rozproszony i błysk dla jednego punktu
@@ -29,29 +28,28 @@ public static class LightingEquation
         }
 
         float nDotL = Vector3.Dot(n, l);
-        float diffuse = nDotL > 0f ? nDotL : 0f;
+        // światło rozproszone zależy od kąta do oświetlonej strony płata
+        float diffuse = MathF.Abs(nDotL);
         float specular = 0f;
-        if (nDotL > 0f)
+        if (specularWeight > 0f && nDotL * n.Z > 0f)
         {
-            // r = 2 (n·l) n − l, tylko gdy ściana jest od strony światła
+            // zwierciadlany refleks widzimy po stronie lampy, w kierunku odbicia
             Vector3 reflection = VectorMath.NormalizeOrZero(2f * nDotL * n - l);
             float vDotR = Vector3.Dot(ViewDirection, reflection);
-            if (vDotR < 0f)
+            if (vDotR > 0f)
             {
-                vDotR = 0f;
+                specular = MathF.Pow(vDotR, shininess);
             }
-
-            specular = MathF.Pow(vDotR, shininess);
         }
 
         Vector3Color diffusePart = diffuseWeight * diffuse * lightColor * objectColor;
         Vector3Color specularPart = specularWeight * specular * lightColor * objectColor;
-        return Clamp01(diffusePart + specularPart);
+        return diffusePart + specularPart;
     }
 
     /// składa normalną z mapy w układ stycznych płata
     // kolumny macierzy to pu, pv i normalna powierzchni, już po obrocie
-    public static Vector3 ApplyNormalMap(Vector3 tangentU, Vector3 tangentV, Vector3 surfaceNormal, Vector3Color textureNormal)
+    public static Vector3 ApplyNormalMap(Vector3 tangentU, Vector3 tangentV, Vector3 surfaceNormal, Vector3 textureNormal)
     {
         Vector3 t = VectorMath.NormalizeOrZero(tangentU);
         Vector3 b = VectorMath.NormalizeOrZero(tangentV);
@@ -61,7 +59,7 @@ public static class LightingEquation
             return n;
         }
 
-        Vector3 mapped = t * textureNormal.R + b * textureNormal.G + n * textureNormal.B;
+        Vector3 mapped = t * textureNormal.X + b * textureNormal.Y + n * textureNormal.Z;
         Vector3 normalized = VectorMath.NormalizeOrZero(mapped);
         return normalized == Vector3.Zero ? n : normalized;
     }
@@ -73,15 +71,6 @@ public static class LightingEquation
         int g = ToByte(color.G);
         int b = ToByte(color.B);
         return (255 << 24) | (r << 16) | (g << 8) | b;
-    }
-
-    /// obcina każdy kanał do przedziału 0–1
-    private static Vector3Color Clamp01(Vector3Color color)
-    {
-        return new Vector3Color(
-            Math.Clamp(color.R, 0f, 1f),
-            Math.Clamp(color.G, 0f, 1f),
-            Math.Clamp(color.B, 0f, 1f));
     }
 
     /// zamienia jeden kanał na bajt 0–255

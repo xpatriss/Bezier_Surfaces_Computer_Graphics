@@ -11,6 +11,7 @@ sealed class HelpForm : Form
         ClientSize = new Size(720, 640);
         MinimizeBox = false;
         Font = new Font("Segoe UI", 10f);
+        Padding = new Padding(12);
 
         var box = new TextBox
         {
@@ -19,8 +20,14 @@ sealed class HelpForm : Form
             ReadOnly = true,
             ScrollBars = ScrollBars.Vertical,
             Font = Font,
-            Text = HelpText.Body
+            BackColor = SystemColors.Window,
+            Text = HelpText.Body.ReplaceLineEndings()
         };
         Controls.Add(box);
+        Shown += (_, _) =>
+        {
+            box.Select(0, 0);
+            box.ScrollToCaret();
+        };
     }
 }

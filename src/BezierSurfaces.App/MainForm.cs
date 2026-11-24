@@ -1,8 +1,5 @@
-using System.Drawing.Drawing2D;
-using System.Drawing.Imaging;
+using System.Diagnostics;
 using System.Numerics;
-using BezierSurfaces.Core.Bezier;
-using BezierSurfaces.Core.Files;
 using BezierSurfaces.Core.Geometry;
 using BezierSurfaces.Core.Lighting;
 using BezierSurfaces.Core.Model;
@@ -15,19 +12,20 @@ namespace BezierSurfaces.App;
 public sealed class MainForm : Form
 {
     private readonly Scene _scene = new();
+    private readonly SceneRenderer _renderer;
     private readonly PictureBox _drawing = new SmoothCanvas();
-    private readonly EdgeBucketRasterizer _rasterizer = new(800);
-    private readonly FrameBuffer _frame = new();
     private readonly System.Windows.Forms.Timer _clock = new();
-    private Bitmap? _bitmap;
+    private readonly Stopwatch _animationTime = new();
+    private float _animationStart;
     private bool _updatingUi;
     private bool _turning;
-    private bool _draggingLight;
+    private MouseButtons _dragButton;
     private int _lightPointIndex = -1;
     private int _selectedSurface;
     private Point _lastMouse;
-    private readonly CheckBox _polygonsBox = new() { Text = "Wielobok kontrolny", Checked = true };
-    private readonly CheckBox _meshBox = new() { Text = "Siatka trójkątów", Checked = true };
+    private Vector2 _lightGrabOffset;
+    private readonly CheckBox _polygonsBox = new() { Text = "Wieloboki kontrolne" };
+    private readonly CheckBox _meshBox = new() { Text = "Siatka trójkątów" };
     private readonly CheckBox _filledBox = new() { Text = "Wypełnione trójkąty", Checked = true };
     private readonly TrackBar _divisionsBar = new()
     {
@@ -44,7 +42,7 @@ public sealed class MainForm : Form
     private readonly TrackBar _diffuseBar = new() { Minimum = 0, Maximum = 100, Value = 75, TickStyle = TickStyle.None, AutoSize = true };
     private readonly TrackBar _specularBar = new() { Minimum = 0, Maximum = 100, Value = 35, TickStyle = TickStyle.None, AutoSize = true };
     private readonly TrackBar _shininessBar = new() { Minimum = 1, Maximum = 100, Value = 24, TickStyle = TickStyle.None, AutoSize = true };
-    private readonly TrackBar _lightZBar = new() { Minimum = -200, Maximum = 200, Value = 100, TickStyle = TickStyle.None, AutoSize = true };
+    private readonly TrackBar _lightZBar = new() { Minimum = -200, Maximum = 200, Value = 165, TickStyle = TickStyle.None, AutoSize = true };
     private readonly Label _lightZLabel = new() { AutoSize = true };
     private readonly CheckBox _animateBox = new() { Text = "Animuj światło" };
     private readonly CheckBox _normalMapBox = new() { Text = "Mapa normalnych" };
@@ -65,7 +63,7 @@ public sealed class MainForm : Form
     private static readonly Color MutedColor = Color.FromArgb(75, 85, 99);
 
     /// ustawia okno, wczytuje powierzchnie i tnie je na trójkąty
-    public MainForm()
+    public MainForm(IReadOnlyList<ControlGrid> grids)
     {
         Text = "Powierzchnie Béziera";
         Font = new Font("Segoe UI", 10f);
@@ -74,35 +72,37 @@ public sealed class MainForm : Form
         MinimumSize = new Size(860, 520);
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Font;
-        KeyPreview = true;
-
+        _renderer = new SceneRenderer(_scene);
         BuildLayout();
-        LoadSurfaces();
+        SetUpSurfaces(grids);
         _scene.Divisions = _divisionsBar.Value;
+        _scene.Draw.ControlPolygons = _polygonsBox.Checked;
+        _scene.Draw.TriangleMesh = _meshBox.Checked;
         ApplyShadingFromUi();
         ApplyLightZFromUi();
+        _scene.LightParameter = 0.57f;
+        _scene.ReplaceOrientation(Matrix3.Multiply(Matrix3.RotationX(0.40f), Matrix3.RotationY(-0.52f)));
         _scene.RebuildMesh();
         RefreshDivisionLabel();
         _clock.Interval = 30;
         _clock.Tick += (_, _) => AdvanceLight();
-        KeyDown += OnKeyDown;
     }
 
     /// układa biały obszar rysowania i szary panel, jak w edytorze wielokątów
     private void BuildLayout()
     {
         var page = new Panel { Dock = DockStyle.Fill, BackColor = PageColor, Padding = new Padding(16) };
-        var panel = new Panel { Dock = DockStyle.Right, Width = 270, BackColor = PanelColor };
-        var stack = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.TopDown,
-            WrapContents = false,
-            AutoScroll = true,
-            BackColor = PanelColor,
-            Padding = new Padding(16, 16, 16, 16)
-        };
-        panel.Controls.Add(stack);
+        var panel = new Panel { Dock = DockStyle.Right, Width = 286, BackColor = PanelColor };
+        var tabs = new TabControl { Dock = DockStyle.Fill };
+        FlowLayoutPanel viewTab = AddTab(tabs, "Widok");
+        FlowLayoutPanel lightTab = AddTab(tabs, "Światło");
+        FlowLayoutPanel materialTab = AddTab(tabs, "Materiał");
+        panel.Controls.Add(tabs);
+        var footer = new Panel { Dock = DockStyle.Bottom, Height = 44, Padding = new Padding(0, 6, 0, 0) };
+        _helpButton.Dock = DockStyle.Fill;
+        _helpButton.Text = "Pomoc (F1)";
+        footer.Controls.Add(_helpButton);
+        panel.Controls.Add(footer);
         var columnGap = new Panel { Dock = DockStyle.Right, Width = 12, BackColor = PageColor };
         var frame = new Panel { Dock = DockStyle.Fill, BackColor = LineColor, Padding = new Padding(1) };
 
@@ -113,7 +113,14 @@ public sealed class MainForm : Form
         _drawing.Resize += (_, _) => _drawing.Invalidate();
         _drawing.MouseDown += OnMouseDown;
         _drawing.MouseMove += OnMouseMove;
-        _drawing.MouseUp += (_, _) => EndTurn();
+        _drawing.MouseUp += OnMouseUp;
+        _drawing.MouseCaptureChanged += (_, _) =>
+        {
+            if (!_drawing.Capture)
+            {
+                EndTurn();
+            }
+        };
         frame.Controls.Add(_drawing);
 
         page.Controls.Add(frame);
@@ -154,43 +161,44 @@ public sealed class MainForm : Form
         StyleFlat(_lightColorButton);
         StyleFlat(_helpButton);
 
-        var hint = Hint("Lewy przycisk przechyla. Prawy kręci w płaszczyźnie ekranu. Pomarańczowe punkty da się ciągnąć. Spacja włącza animację. F1 otwiera pomoc.");
-        AddRow(stack, Heading("Dokładność siatki"));
-        AddRow(stack, _divisionsLabel);
-        AddRow(stack, _divisionsBar);
-        AddRow(stack, Rule());
-        AddRow(stack, Heading("Widok"));
-        AddRow(stack, _polygonsBox);
-        AddRow(stack, _meshBox);
-        AddRow(stack, _filledBox);
-        AddRow(stack, Rule());
-        AddRow(stack, Heading("Światło"));
-        AddRow(stack, _diffuseLabel);
-        AddRow(stack, _diffuseBar);
-        AddRow(stack, _specularLabel);
-        AddRow(stack, _specularBar);
-        AddRow(stack, _shininessLabel);
-        AddRow(stack, _shininessBar);
-        AddRow(stack, _lightZLabel);
-        AddRow(stack, _lightZBar);
-        AddRow(stack, _animateBox);
-        AddRow(stack, _lightColorButton);
-        AddRow(stack, _resetButton);
-        AddRow(stack, Rule());
-        AddRow(stack, Heading("Powierzchnia"));
-        AddRow(stack, _surfaceList);
-        AddRow(stack, _solidRadio);
-        AddRow(stack, _textureRadio);
-        AddRow(stack, _objectColorButton);
-        AddRow(stack, _textureButton);
-        AddRow(stack, Rule());
-        AddRow(stack, _normalMapBox);
-        AddRow(stack, _normalButton);
-        AddRow(stack, _helpButton);
-        AddRow(stack, Rule());
-        AddRow(stack, hint);
-        panel.Resize += (_, _) => FitStack(stack, hint);
-        FitStack(stack, hint);
+        _divisionsBar.AccessibleName = "Podziały siatki";
+        _diffuseBar.AccessibleName = "Odbicie rozproszone";
+        _specularBar.AccessibleName = "Siła połysku";
+        _shininessBar.AccessibleName = "Skupienie połysku";
+        _lightZBar.AccessibleName = "Wysokość lampy";
+        _surfaceList.AccessibleName = "Powierzchnia do zmiany materiału";
+
+        AddRow(viewTab, _divisionsLabel);
+        AddRow(viewTab, _divisionsBar);
+        AddRow(viewTab, _filledBox);
+        AddRow(viewTab, _meshBox);
+        AddRow(viewTab, _polygonsBox);
+        AddRow(viewTab, _resetButton);
+        AddRow(viewTab, Hint("Przeciągnij lewym przyciskiem, aby przechylić scenę. Prawy obraca ją w płaszczyźnie ekranu."));
+
+        AddRow(lightTab, _diffuseLabel);
+        AddRow(lightTab, _diffuseBar);
+        AddRow(lightTab, _specularLabel);
+        AddRow(lightTab, _specularBar);
+        AddRow(lightTab, _shininessLabel);
+        AddRow(lightTab, _shininessBar);
+        AddRow(lightTab, _lightZLabel);
+        AddRow(lightTab, _lightZBar);
+        AddRow(lightTab, _animateBox);
+        AddRow(lightTab, _lightColorButton);
+        AddRow(lightTab, Hint("Przeciągnij pomarańczowy uchwyt, aby zmienić tor lampy. Spacja zatrzymuje lub wznawia ruch."));
+
+        AddRow(materialTab, Heading("Powierzchnia"));
+        AddRow(materialTab, _surfaceList);
+        AddRow(materialTab, _solidRadio);
+        AddRow(materialTab, _objectColorButton);
+        AddRow(materialTab, _textureRadio);
+        AddRow(materialTab, _textureButton);
+        AddRow(materialTab, _normalMapBox);
+        AddRow(materialTab, _normalButton);
+        FitStack(viewTab);
+        FitStack(lightTab);
+        FitStack(materialTab);
 
         _divisionsBar.ValueChanged += (_, _) =>
         {
@@ -234,7 +242,7 @@ public sealed class MainForm : Form
             ApplyLightZFromUi();
             _drawing.Invalidate();
         };
-        _animateBox.CheckedChanged += (_, _) => _clock.Enabled = _animateBox.Checked;
+        _animateBox.CheckedChanged += (_, _) => SetAnimation(_animateBox.Checked);
         _resetButton.Click += (_, _) =>
         {
             _scene.ReplaceOrientation(Matrix3.Identity);
@@ -262,7 +270,24 @@ public sealed class MainForm : Form
         _helpButton.Click += (_, _) => ShowHelp();
     }
 
-    /// płaski biały przycisk z szarą ramką i zapasem pod ogonki
+    private static FlowLayoutPanel AddTab(TabControl tabs, string title)
+    {
+        var tab = new TabPage(title) { BackColor = PanelColor };
+        var stack = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            AutoScroll = true,
+            Padding = new Padding(12)
+        };
+        tab.Controls.Add(stack);
+        tabs.TabPages.Add(tab);
+        stack.Resize += (_, _) => FitStack(stack);
+        return stack;
+    }
+
+    /// płaski przycisk z zapasem na krój pisma
     private static void StyleFlat(Button button)
     {
         button.Font = new Font("Segoe UI", 10f);
@@ -270,8 +295,8 @@ public sealed class MainForm : Form
         button.BackColor = PageColor;
         button.ForeColor = InkColor;
         button.TextAlign = ContentAlignment.MiddleCenter;
-        button.Padding = new Padding(8, 10, 8, 14);
-        button.Height = ButtonHeight(button);
+        button.Padding = new Padding(6, 2, 6, 3);
+        button.Height = TextRenderer.MeasureText(button.Text, button.Font).Height + 14;
         button.FlatAppearance.BorderColor = LineColor;
         button.FlatAppearance.BorderSize = 1;
     }
@@ -279,41 +304,33 @@ public sealed class MainForm : Form
     /// dokłada kontrolkę pod poprzednią, z odstępem
     private static void AddRow(FlowLayoutPanel stack, Control control)
     {
-        control.Margin = new Padding(0, 0, 0, 12);
+        control.Margin = new Padding(0, 0, 0, 5);
         stack.Controls.Add(control);
     }
 
     /// rozciąga wiersze na szerokość panelu, bez zmiany ich wysokości
-    private static void FitStack(FlowLayoutPanel stack, Label hint)
+    private static void FitStack(FlowLayoutPanel stack)
     {
-        int width = stack.ClientSize.Width - stack.Padding.Horizontal;
+        int width = stack.Width - stack.Padding.Horizontal - SystemInformation.VerticalScrollBarWidth;
         if (width < 40)
         {
             return;
         }
 
-        hint.MaximumSize = new Size(width, 0);
+        stack.SuspendLayout();
         foreach (Control control in stack.Controls)
         {
-            if (control is Label { AutoSize: true })
+            if (control is Label label)
             {
-                continue;
+                label.MaximumSize = new Size(width, 0);
             }
-
-            control.Width = width;
-            if (control is Button button)
+            else
             {
-                button.Height = ButtonHeight(button);
+                control.Width = width;
             }
         }
-    }
 
-    /// wysokość przycisku z zapasem pod ogonki liter
-    // sam pomiar tekstu obcina dół g i y na płaskim przycisku
-    private static int ButtonHeight(Button button)
-    {
-        int textHeight = TextRenderer.MeasureText(button.Text, button.Font).Height;
-        return textHeight + button.Padding.Vertical + 16;
+        stack.ResumeLayout();
     }
 
     /// nagłówek sekcji w panelu
@@ -342,12 +359,6 @@ public sealed class MainForm : Form
         };
     }
 
-    /// cienka linia między sekcjami
-    private static Panel Rule()
-    {
-        return new Panel { BackColor = LineColor, Height = 1 };
-    }
-
     /// ustawia pole wyboru albo radio na kolor panelu
     private static void StyleOption(ButtonBase box)
     {
@@ -362,9 +373,9 @@ public sealed class MainForm : Form
         _scene.DiffuseWeight = _diffuseBar.Value / 100f;
         _scene.SpecularWeight = _specularBar.Value / 100f;
         _scene.Shininess = _shininessBar.Value;
-        _diffuseLabel.Text = $"kd: {_scene.DiffuseWeight:0.00}";
-        _specularLabel.Text = $"ks: {_scene.SpecularWeight:0.00}";
-        _shininessLabel.Text = $"m: {_shininessBar.Value}";
+        _diffuseLabel.Text = $"Rozproszenie kd  {_scene.DiffuseWeight:0.00}";
+        _specularLabel.Text = $"Siła połysku ks  {_scene.SpecularWeight:0.00}";
+        _shininessLabel.Text = $"Skupienie połysku m  {_shininessBar.Value}";
     }
 
     /// przesuwa całą krzywą światła na wysokość z suwaka
@@ -375,29 +386,46 @@ public sealed class MainForm : Form
         _lightZLabel.Text = $"z światła: {_scene.LightPath.Z:0.00}";
     }
 
-    /// posuwa lampę wzdłuż krzywej i zawija parametr po pełnym obiegu
-    private void AdvanceLight()
+    private void SetAnimation(bool animate)
     {
-        _scene.LightParameter += 0.008f;
-        if (_scene.LightParameter > 1f)
+        if (animate)
         {
-            _scene.LightParameter -= 1f;
+            _animationStart = _scene.LightParameter;
+            _animationTime.Restart();
+        }
+        else if (_animationTime.IsRunning)
+        {
+            AdvanceLight();
+            _animationTime.Stop();
         }
 
+        _clock.Enabled = animate;
+    }
+
+    /// pozycja lampy zależy od czasu, więc cięższa klatka nie spowalnia obiegu
+    private void AdvanceLight()
+    {
+        const double cyclesPerSecond = 0.27;
+        _scene.LightParameter = (float)((_animationStart + _animationTime.Elapsed.TotalSeconds * cyclesPerSecond) % 1.0);
         _drawing.Invalidate();
     }
 
-    /// spacja włącza i wyłącza animację lampy
-    private void OnKeyDown(object? sender, KeyEventArgs e)
+    /// obsługuje skróty przed kontrolką, która aktualnie ma fokus
+    protected override bool ProcessCmdKey(ref Message message, Keys keyData)
     {
-        if (e.KeyCode == Keys.Space)
+        if (keyData == Keys.Space)
         {
             _animateBox.Checked = !_animateBox.Checked;
+            return true;
         }
-        else if (e.KeyCode == Keys.F1)
+
+        if (keyData == Keys.F1)
         {
             ShowHelp();
+            return true;
         }
+
+        return base.ProcessCmdKey(ref message, keyData);
     }
 
     /// pokazuje instrukcję w osobnym oknie
@@ -413,36 +441,27 @@ public sealed class MainForm : Form
         _divisionsLabel.Text = $"Podział: {_divisionsBar.Value}";
     }
 
-    /// czyta plik startowy i dokłada siatki do sceny
-    private void LoadSurfaces()
+    /// dodaje wczytane siatki i ich startowe materiały
+    private void SetUpSurfaces(IReadOnlyList<ControlGrid> grids)
     {
-        string path = Path.Combine(AppContext.BaseDirectory, "data", "surfaces.txt");
-        try
+        var colors = new[]
         {
-            List<ControlGrid> grids = SurfaceFileReader.Read(path);
-            var colors = new[]
+            new Vector3Color(0.30f, 0.69f, 0.52f),
+            new Vector3Color(0.37f, 0.57f, 0.86f)
+        };
+        for (int index = 0; index < grids.Count; index++)
+        {
+            var appearance = new SurfaceAppearance
             {
-                new Vector3Color(0.22f, 0.55f, 0.38f),
-                new Vector3Color(0.25f, 0.40f, 0.75f)
+                SolidColor = colors[index % colors.Length],
+                Texture = DefaultImages.BrickColor
             };
-            for (int index = 0; index < grids.Count; index++)
-            {
-                var appearance = new SurfaceAppearance
-                {
-                    SolidColor = colors[index % colors.Length],
-                    Texture = DefaultImages.BrickColor
-                };
-                _scene.Surfaces.Add(new BezierSurface(grids[index], appearance));
-                _surfaceList.Items.Add($"Powierzchnia {index + 1}");
-            }
-        }
-        catch (Exception exception)
-        {
-            MessageBox.Show(this, exception.Message, "Plik powierzchni");
+            _scene.Surfaces.Add(new BezierSurface(grids[index], appearance));
+            _surfaceList.Items.Add($"Powierzchnia {index + 1}");
         }
 
         _scene.NormalMap = DefaultImages.BrickNormal;
-        _lightColorButton.BackColor = BitmapImages.ToMedia(_scene.LightColor);
+        ShowColor(_lightColorButton, BitmapImages.ToMedia(_scene.LightColor));
         if (_surfaceList.Items.Count > 0)
         {
             _surfaceList.SelectedIndex = 0;
@@ -463,7 +482,7 @@ public sealed class MainForm : Form
         _updatingUi = true;
         _solidRadio.Checked = !appearance.UseTexture;
         _textureRadio.Checked = appearance.UseTexture;
-        _objectColorButton.BackColor = BitmapImages.ToMedia(appearance.SolidColor);
+        ShowColor(_objectColorButton, BitmapImages.ToMedia(appearance.SolidColor));
         _updatingUi = false;
     }
 
@@ -489,7 +508,7 @@ public sealed class MainForm : Form
         }
 
         _scene.LightColor = new Vector3Color(dialog.Color.R / 255f, dialog.Color.G / 255f, dialog.Color.B / 255f);
-        _lightColorButton.BackColor = dialog.Color;
+        ShowColor(_lightColorButton, dialog.Color);
         _drawing.Invalidate();
     }
 
@@ -509,7 +528,7 @@ public sealed class MainForm : Form
 
         _scene.Surfaces[_selectedSurface].Appearance.SolidColor =
             new Vector3Color(dialog.Color.R / 255f, dialog.Color.G / 255f, dialog.Color.B / 255f);
-        _objectColorButton.BackColor = dialog.Color;
+        ShowColor(_objectColorButton, dialog.Color);
         _solidRadio.Checked = true;
         _drawing.Invalidate();
     }
@@ -522,13 +541,13 @@ public sealed class MainForm : Form
             return;
         }
 
-        using var dialog = new OpenFileDialog { Filter = "Obrazy|*.png;*.jpg;*.jpeg;*.bmp" };
-        if (dialog.ShowDialog(this) != DialogResult.OK)
+        RgbImage? texture = ChooseImage("Tekstura");
+        if (texture is null)
         {
             return;
         }
 
-        _scene.Surfaces[_selectedSurface].Appearance.Texture = BitmapImages.Load(dialog.FileName);
+        _scene.Surfaces[_selectedSurface].Appearance.Texture = texture;
         _textureRadio.Checked = true;
         _drawing.Invalidate();
     }
@@ -536,200 +555,146 @@ public sealed class MainForm : Form
     /// podmienia wspólną mapę normalnych i ją włącza
     private void LoadNormalMap()
     {
-        using var dialog = new OpenFileDialog { Filter = "Obrazy|*.png;*.jpg;*.jpeg;*.bmp" };
-        if (dialog.ShowDialog(this) != DialogResult.OK)
+        RgbImage? map = ChooseImage("Mapa normalnych", normalMap: true);
+        if (map is null)
         {
             return;
         }
 
-        _scene.NormalMap = BitmapImages.Load(dialog.FileName);
+        _scene.NormalMap = map;
         _normalMapBox.Checked = true;
         _drawing.Invalidate();
     }
 
-    /// rysuje osie, trójkąty płata i wieloboki kontrolne
-    private void OnPaint(object? sender, PaintEventArgs e)
+    private RgbImage? ChooseImage(string title, bool normalMap = false)
     {
-        int width = _drawing.ClientSize.Width;
-        int height = _drawing.ClientSize.Height;
-        if (width < 2 || height < 2)
+        using var dialog = new OpenFileDialog { Title = title, Filter = "Obrazy|*.png;*.jpg;*.jpeg;*.bmp" };
+        if (dialog.ShowDialog(this) != DialogResult.OK)
         {
-            return;
+            return null;
         }
 
-        ScreenMap map = ScreenMap.Fit(width, height);
-        if (_scene.Draw.FilledTriangles)
-        {
-            DrawFilled(e.Graphics, map, width, height);
-        }
-
-        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-        DrawAxes(e.Graphics, map);
-        if (_scene.Draw.TriangleMesh)
-        {
-            DrawMesh(e.Graphics, map);
-        }
-
-        if (_scene.Draw.ControlPolygons)
-        {
-            for (int index = 0; index < _scene.Surfaces.Count; index++)
-            {
-                DrawControlPolygon(
-                    e.Graphics,
-                    map,
-                    _scene.Surfaces[index].ControlPoints,
-                    _scene.Orientation,
-                    ColorFor(index));
-            }
-        }
-
-        DrawLight(e.Graphics, map);
-    }
-
-    /// wypełnia trójkąty do bitmapy i kładzie ją pod liniami
-    // kolor liczy wzór światła w każdym pikselu, o wygranej decyduje większe z
-    private void DrawFilled(Graphics graphics, ScreenMap map, int width, int height)
-    {
-        _frame.Resize(width, height);
-        _frame.Clear(unchecked((int)0xFFFFFFFF));
-        _rasterizer.DrawMesh(_scene, map, _frame, _scene.CurrentLightPosition);
-        if (_bitmap is null || _bitmap.Width != width || _bitmap.Height != height)
-        {
-            _bitmap?.Dispose();
-            _bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
-        }
-
-        var bits = _bitmap.LockBits(
-            new Rectangle(0, 0, width, height),
-            ImageLockMode.WriteOnly,
-            PixelFormat.Format32bppArgb);
         try
         {
-            _frame.CopyTo(bits.Scan0, bits.Stride);
+            return BitmapImages.Load(dialog.FileName, normalMap);
         }
-        finally
+        catch (Exception exception) when (exception is ArgumentException or IOException or InvalidDataException or UnauthorizedAccessException
+            or System.Runtime.InteropServices.ExternalException or OutOfMemoryException or OverflowException)
         {
-            _bitmap.UnlockBits(bits);
-        }
-
-        graphics.DrawImageUnscaled(_bitmap, 0, 0);
-    }
-
-    /// rysuje boki trójkątów leżących na płachcie
-    private void DrawMesh(Graphics graphics, ScreenMap map)
-    {
-        using var first = new Pen(CurveColorFor(0), 1f);
-        using var second = new Pen(CurveColorFor(1), 1f);
-        foreach (MeshTriangle triangle in _scene.Mesh.Triangles)
-        {
-            Pen pen = triangle.SurfaceIndex % 2 == 0 ? first : second;
-            DrawSegment(graphics, pen, map, triangle.A.PositionView, triangle.B.PositionView);
-            DrawSegment(graphics, pen, map, triangle.B.PositionView, triangle.C.PositionView);
-            DrawSegment(graphics, pen, map, triangle.C.PositionView, triangle.A.PositionView);
+            MessageBox.Show(this, $"Nie udało się wczytać obrazu.\n{exception.Message}",
+                title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return null;
         }
     }
 
-    /// rysuje szary krzyż osi przez środek okna
-    private static void DrawAxes(Graphics graphics, ScreenMap map)
+    private static void ShowColor(Button button, Color color)
     {
-        using var pen = new Pen(Color.FromArgb(180, 190, 190, 190), 1f);
-        graphics.DrawLine(pen, 0, map.CenterY, map.Width, map.CenterY);
-        graphics.DrawLine(pen, map.CenterX, 0, map.CenterX, map.Height);
+        button.BackColor = color;
+        float brightness = 0.2126f * color.R + 0.7152f * color.G + 0.0722f * color.B;
+        button.ForeColor = brightness < 130f ? Color.White : InkColor;
     }
 
-    /// rysuje drogę światła, jej punkty kontrolne i samą lampę
-    // krzywa jest w układzie okna, więc nie mnożymy jej przez obrót bryły
-    private void DrawLight(Graphics graphics, ScreenMap map)
+    private void OnPaint(object? sender, PaintEventArgs e)
     {
-        using var curvePen = new Pen(Color.DarkOrange, 2f);
-        using var handleBrush = new SolidBrush(Color.OrangeRed);
-        using var lampBrush = new SolidBrush(Color.Gold);
-        Vector2 previous = map.ToScreen(BezierCurve.Point(_scene.LightPath.Points, 0f));
-        const int samples = 80;
-        for (int i = 1; i <= samples; i++)
+        if (_drawing.ClientSize.Width >= 2 && _drawing.ClientSize.Height >= 2)
         {
-            float t = i / (float)samples;
-            Vector2 next = map.ToScreen(BezierCurve.Point(_scene.LightPath.Points, t));
-            graphics.DrawLine(curvePen, previous.X, previous.Y, next.X, next.Y);
-            previous = next;
+            _renderer.Draw(e.Graphics, GetScreenMap());
         }
+    }
 
-        for (int i = 0; i < 6; i++)
-        {
-            Vector2 screen = map.ToScreen(_scene.LightPath.Points[i]);
-            graphics.FillRectangle(handleBrush, screen.X - 4f, screen.Y - 4f, 8f, 8f);
-        }
-
-        Vector2 lamp = map.ToScreen(_scene.CurrentLightPosition);
-        graphics.FillEllipse(lampBrush, lamp.X - 6f, lamp.Y - 6f, 12f, 12f);
+    private ScreenMap GetScreenMap()
+    {
+        return ScreenMap.Fit(_drawing.ClientSize.Width, _drawing.ClientSize.Height, _scene.FitRadius);
     }
 
     /// zaczyna ciągnięcie punktu światła albo obrót sceny
     private void OnMouseDown(object? sender, MouseEventArgs e)
     {
-        if (e.Button is not (MouseButtons.Left or MouseButtons.Right))
+        if (_dragButton != MouseButtons.None || e.Button is not (MouseButtons.Left or MouseButtons.Right))
         {
             return;
         }
 
         _lastMouse = e.Location;
-        ScreenMap map = ScreenMap.Fit(
-            Math.Max(1, _drawing.ClientSize.Width),
-            Math.Max(1, _drawing.ClientSize.Height));
-        _lightPointIndex = HitLightPoint(map, e.Location);
-        if (_lightPointIndex >= 0 && e.Button == MouseButtons.Left)
+        _dragButton = e.Button;
+        ScreenMap map = GetScreenMap();
+        _lightPointIndex = e.Button == MouseButtons.Left ? HitLightPoint(map, e.Location) : -1;
+        if (_lightPointIndex >= 0)
         {
-            _draggingLight = true;
-            _drawing.Capture = true;
-            return;
+            _lightGrabOffset = map.ToScreen(_scene.LightPath.Points[_lightPointIndex]) - new Vector2(e.X, e.Y);
         }
 
-        int? surface = SurfacePicker.FrontSurface(_scene.Mesh, map, e.X, e.Y);
-        if (surface is int index && index < _surfaceList.Items.Count)
-        {
-            _surfaceList.SelectedIndex = index;
-        }
-
-        _turning = true;
         _drawing.Capture = true;
     }
 
     /// przesuwa punkt krzywej albo dokłada mały obrót i odrysowuje scenę
     private void OnMouseMove(object? sender, MouseEventArgs e)
     {
-        float dx = e.X - _lastMouse.X;
-        float dy = e.Y - _lastMouse.Y;
-        _lastMouse = e.Location;
-        if (_draggingLight)
+        if (_dragButton == MouseButtons.None)
         {
-            ScreenMap map = ScreenMap.Fit(
-                Math.Max(1, _drawing.ClientSize.Width),
-                Math.Max(1, _drawing.ClientSize.Height));
-            Vector3 view = map.ToView(e.X, e.Y, _scene.LightPath.Z);
+            return;
+        }
+
+        if (_lightPointIndex >= 0)
+        {
+            ScreenMap map = GetScreenMap();
+            float x = Math.Clamp(e.X + _lightGrabOffset.X, 0f, map.Width - 1f);
+            float y = Math.Clamp(e.Y + _lightGrabOffset.Y, 0f, map.Height - 1f);
+            Vector3 view = map.ToView(x, y, _scene.LightPath.Z);
             _scene.LightPath.MoveXy(_lightPointIndex, view.X, view.Y);
             _drawing.Invalidate();
             return;
         }
 
-        if (!_turning || (dx == 0f && dy == 0f))
+        int dx = e.X - _lastMouse.X;
+        int dy = e.Y - _lastMouse.Y;
+        if (!_turning && Math.Abs(dx) < 3 && Math.Abs(dy) < 3)
         {
             return;
         }
 
-        TurnAxis axis = (Control.MouseButtons & MouseButtons.Right) != 0
-            ? TurnAxis.ScreenZ
-            : TurnAxis.ScreenXAndY;
+        _turning = true;
+        _lastMouse = e.Location;
+        TurnAxis axis = _dragButton == MouseButtons.Right ? TurnAxis.ScreenZ : TurnAxis.ScreenXAndY;
         Matrix3 increment = TurntableRotation.Increment(dx, dy, axis);
         // z lewej, bo nowy ruch jest względem ekranu, a nie względem już obróconej bryły
         _scene.ReplaceOrientation(Matrix3.Multiply(increment, _scene.Orientation));
         _drawing.Invalidate();
     }
 
+    private void OnMouseUp(object? sender, MouseEventArgs e)
+    {
+        if (e.Button != _dragButton)
+        {
+            return;
+        }
+
+        if (!_turning && _lightPointIndex < 0 && e.Button == MouseButtons.Left)
+        {
+            int? surface = null;
+            if (_scene.Draw.FilledTriangles)
+            {
+                surface = _renderer.VisibleSurface(e.Location);
+            }
+            else if (_scene.Draw.TriangleMesh)
+            {
+                surface = SurfacePicker.FrontSurface(_scene.Mesh, GetScreenMap(), e.X + 0.5f, e.Y + 0.5f);
+            }
+
+            if (surface is int index)
+            {
+                _surfaceList.SelectedIndex = index;
+            }
+        }
+
+        EndTurn();
+    }
+
     /// kończy obrót albo ciągnięcie punktu po puszczeniu przycisku
     private void EndTurn()
     {
         _turning = false;
-        _draggingLight = false;
+        _dragButton = MouseButtons.None;
         _lightPointIndex = -1;
         _drawing.Capture = false;
     }
@@ -739,7 +704,7 @@ public sealed class MainForm : Form
     {
         int found = -1;
         float best = 10f * 10f;
-        for (int i = 0; i < 6; i++)
+        for (int i = 0; i < LightCurve.ControlPointCount - 1; i++)
         {
             Vector2 screen = map.ToScreen(_scene.LightPath.Points[i]);
             float dx = screen.X - cursor.X;
@@ -753,73 +718,6 @@ public sealed class MainForm : Form
         }
 
         return found;
-    }
-
-    /// łączy sąsiednie punkty kontrolne i zaznacza same punkty
-    private static void DrawControlPolygon(
-        Graphics graphics,
-        ScreenMap map,
-        ControlGrid grid,
-        Matrix3 orientation,
-        Color color)
-    {
-        using var pen = new Pen(color, 1.6f);
-        using var brush = new SolidBrush(color);
-        for (int row = 0; row < 4; row++)
-        {
-            for (int column = 0; column < 3; column++)
-            {
-                DrawSegment(
-                    graphics,
-                    pen,
-                    map,
-                    orientation.Transform(grid[row, column]),
-                    orientation.Transform(grid[row, column + 1]));
-            }
-        }
-
-        for (int column = 0; column < 4; column++)
-        {
-            for (int row = 0; row < 3; row++)
-            {
-                DrawSegment(
-                    graphics,
-                    pen,
-                    map,
-                    orientation.Transform(grid[row, column]),
-                    orientation.Transform(grid[row + 1, column]));
-            }
-        }
-
-        for (int row = 0; row < 4; row++)
-        {
-            for (int column = 0; column < 4; column++)
-            {
-                Vector2 screen = map.ToScreen(orientation.Transform(grid[row, column]));
-                graphics.FillRectangle(brush, screen.X - 3f, screen.Y - 3f, 6f, 6f);
-            }
-        }
-    }
-
-    /// rysuje jeden odcinek między dwoma już obróconymi punktami
-    // rzut prostokątny: na ekran idą x i y, z po obrocie już siedzi w tych dwóch liczbach
-    private static void DrawSegment(Graphics graphics, Pen pen, ScreenMap map, Vector3 start, Vector3 end)
-    {
-        Vector2 a = map.ToScreen(start);
-        Vector2 b = map.ToScreen(end);
-        graphics.DrawLine(pen, a.X, a.Y, b.X, b.Y);
-    }
-
-    /// wybiera jaśniejszy kolor boków trójkątów
-    private static Color CurveColorFor(int surfaceIndex)
-    {
-        return surfaceIndex % 2 == 0 ? Color.SeaGreen : Color.RoyalBlue;
-    }
-
-    /// wybiera kolor wieloboku: zielony dla pierwszej powierzchni, niebieski dla drugiej
-    private static Color ColorFor(int surfaceIndex)
-    {
-        return surfaceIndex % 2 == 0 ? Color.DarkGreen : Color.DarkBlue;
     }
 
     /// obszar rysowania bez migotania przy zmianie rozmiaru
@@ -836,7 +734,7 @@ public sealed class MainForm : Form
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         _clock.Dispose();
-        _bitmap?.Dispose();
+        _renderer.Dispose();
         base.OnFormClosed(e);
     }
 }

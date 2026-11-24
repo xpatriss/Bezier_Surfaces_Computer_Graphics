@@ -94,4 +94,14 @@ public readonly struct Matrix3
             M21 * vector.X + M22 * vector.Y + M23 * vector.Z,
             M31 * vector.X + M32 * vector.Y + M33 * vector.Z);
     }
+
+    public Matrix3 Orthonormalized()
+    {
+        // usuwa drobny dryf po wielu złożeniach obrotów
+        Vector3 x = Vector3.Normalize(new Vector3(M11, M21, M31));
+        Vector3 y = new(M12, M22, M32);
+        y = Vector3.Normalize(y - Vector3.Dot(x, y) * x);
+        Vector3 z = Vector3.Cross(x, y);
+        return new Matrix3(x.X, y.X, z.X, x.Y, y.Y, z.Y, x.Z, y.Z, z.Z);
+    }
 }

@@ -22,26 +22,31 @@ public sealed class FragmentShader
             alpha * triangle.A.NormalView +
             beta * triangle.B.NormalView +
             gamma * triangle.C.NormalView;
-        Vector3 tangentU =
-            alpha * triangle.A.TangentUView +
-            beta * triangle.B.TangentUView +
-            gamma * triangle.C.TangentUView;
-        Vector3 tangentV =
-            alpha * triangle.A.TangentVView +
-            beta * triangle.B.TangentVView +
-            gamma * triangle.C.TangentVView;
-        float u = alpha * triangle.A.U + beta * triangle.B.U + gamma * triangle.C.U;
-        float v = alpha * triangle.A.V + beta * triangle.B.V + gamma * triangle.C.V;
-
-        if (Scene.UseNormalMap && Scene.NormalMap is not null)
+        SurfaceAppearance appearance = Scene.Surfaces[triangle.SurfaceIndex].Appearance;
+        RgbImage? normalMap = Scene.UseNormalMap ? Scene.NormalMap : null;
+        float u = 0f;
+        float v = 0f;
+        if (appearance.UseTexture || normalMap is not null)
         {
-            Vector3Color encoded = Scene.NormalMap.Sample(u, v);
-            Vector3Color decoded = RgbImage.DecodeNormal(encoded);
+            u = alpha * triangle.A.U + beta * triangle.B.U + gamma * triangle.C.U;
+            v = alpha * triangle.A.V + beta * triangle.B.V + gamma * triangle.C.V;
+        }
+
+        if (normalMap is not null)
+        {
+            Vector3 tangentU =
+                alpha * triangle.A.TangentUView +
+                beta * triangle.B.TangentUView +
+                gamma * triangle.C.TangentUView;
+            Vector3 tangentV =
+                alpha * triangle.A.TangentVView +
+                beta * triangle.B.TangentVView +
+                gamma * triangle.C.TangentVView;
+            Vector3 decoded = RgbImage.DecodeNormal(normalMap.Sample(u, v));
             normal = LightingEquation.ApplyNormalMap(tangentU, tangentV, normal, decoded);
         }
 
-        BezierSurface surface = Scene.Surfaces[triangle.SurfaceIndex];
-        Vector3Color objectColor = ObjectColor(surface.Appearance, u, v);
+        Vector3Color objectColor = ObjectColor(appearance, u, v);
         return LightingEquation.Compute(
             normal,
             position,

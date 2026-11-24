@@ -12,6 +12,7 @@ public sealed class FrameBuffer
     public int[] Pixels { get; private set; } = Array.Empty<int>();
 
     public float[] Depth { get; private set; } = Array.Empty<float>();
+    private int[] _surfaceIndices = Array.Empty<int>();
 
     /// tworzy tablice od nowa, gdy zmienił się rozmiar okna
     public void Resize(int width, int height)
@@ -25,6 +26,8 @@ public sealed class FrameBuffer
         Height = height;
         Pixels = new int[width * height];
         Depth = new float[width * height];
+        _surfaceIndices = new int[width * height];
+        Array.Fill(Depth, float.NegativeInfinity);
     }
 
     /// maluje tło i ustawia głębokość tak, żeby każdy punkt sceny był bliżej
@@ -35,17 +38,23 @@ public sealed class FrameBuffer
         Array.Fill(Depth, float.NegativeInfinity);
     }
 
-    /// zapisuje piksel tylko wtedy, gdy nowe z jest większe od zapamiętanego
-    public void WriteIfCloser(int x, int y, float z, int color)
+    /// odczytuje powierzchnię, która wygrała test głębokości
+    public int? SurfaceAt(int x, int y)
     {
-        int index = y * Width + x;
-        if (z <= Depth[index])
+        if ((uint)x >= (uint)Width || (uint)y >= (uint)Height)
         {
-            return;
+            return null;
         }
 
+        int index = y * Width + x;
+        return float.IsNegativeInfinity(Depth[index]) ? null : _surfaceIndices[index];
+    }
+
+    internal void WriteVisible(int index, float z, int color, int surfaceIndex)
+    {
         Depth[index] = z;
         Pixels[index] = color;
+        _surfaceIndices[index] = surfaceIndex;
     }
 
     /// kopiuje piksele do bitmapy okna

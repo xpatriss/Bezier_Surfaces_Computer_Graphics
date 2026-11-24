@@ -62,7 +62,8 @@ public static class SurfaceFileReader
     /// zamienia tekst z wiersza pliku na liczbę
     private static float Parse(string text, int lineNumber)
     {
-        if (!float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out float value))
+        if (!float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out float value)
+            || !float.IsFinite(value))
         {
             throw new FormatException($"linia {lineNumber} ma niepoprawną liczbę");
         }

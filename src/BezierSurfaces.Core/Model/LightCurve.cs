@@ -7,21 +7,24 @@ namespace BezierSurfaces.Core.Model;
 public sealed class LightCurve
 {
     public const int ControlPointCount = 7;
+    private const int ClosingPoint = ControlPointCount - 1;
+    private readonly Vector3[] _points = new Vector3[ControlPointCount];
 
     /// układa sześć punktów na okręgu i domyka krzywą kopią pierwszego
     public LightCurve()
     {
         const float radius = 1.05f;
-        for (int i = 0; i < 6; i++)
+        for (int i = 0; i < ClosingPoint; i++)
         {
             float angle = i * MathF.PI / 3f;
-            Points[i] = new Vector3(radius * MathF.Cos(angle), radius * MathF.Sin(angle), 1.0f);
+            _points[i] = new Vector3(radius * MathF.Cos(angle), radius * MathF.Sin(angle), 1.0f);
         }
 
-        Points[6] = Points[0];
+        _points[ClosingPoint] = _points[0];
+        Points = Array.AsReadOnly(_points);
     }
 
-    public Vector3[] Points { get; } = new Vector3[ControlPointCount];
+    public IReadOnlyList<Vector3> Points { get; }
 
     public float Z => Points[0].Z;
 
@@ -29,20 +32,19 @@ public sealed class LightCurve
     // indeks 6 to ten sam punkt co 0, więc ruszamy oryginał i odświeżamy kopię
     public void MoveXy(int index, float x, float y)
     {
-        int slot = index == 6 ? 0 : index;
-        float z = Points[0].Z;
-        Points[slot] = new Vector3(x, y, z);
-        Points[6] = Points[0];
+        int slot = index == ClosingPoint ? 0 : index;
+        _points[slot] = new Vector3(x, y, Z);
+        _points[ClosingPoint] = _points[0];
     }
 
     /// ustawia tę samą wysokość z wszystkim punktom
     public void SetZ(float z)
     {
-        for (int i = 0; i < 6; i++)
+        for (int i = 0; i < ClosingPoint; i++)
         {
-            Points[i] = new Vector3(Points[i].X, Points[i].Y, z);
+            _points[i] = new Vector3(_points[i].X, _points[i].Y, z);
         }
 
-        Points[6] = Points[0];
+        _points[ClosingPoint] = _points[0];
     }
 }

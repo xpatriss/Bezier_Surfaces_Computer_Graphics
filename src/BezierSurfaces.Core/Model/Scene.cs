@@ -17,6 +17,8 @@ public sealed class Scene
 
     public Matrix3 Orientation { get; private set; } = Matrix3.Identity;
 
+    public float FitRadius { get; private set; } = 1.2f;
+
     // krzywa zostaje w układzie obserwatora, obrót bryły jej nie rusza
     public LightCurve LightPath { get; } = new();
 
@@ -43,13 +45,25 @@ public sealed class Scene
     public void RebuildMesh()
     {
         Mesh = SurfaceMeshBuilder.Build(Surfaces, Divisions);
+        FitRadius = 1.2f;
+        foreach (BezierSurface surface in Surfaces)
+        {
+            for (int row = 0; row < 4; row++)
+            {
+                for (int column = 0; column < 4; column++)
+                {
+                    FitRadius = Math.Max(FitRadius, surface.ControlPoints[row, column].Length());
+                }
+            }
+        }
+
         ApplyOrientation();
     }
 
     /// podmienia macierz obrotu i przelicza punkty na ekran
     public void ReplaceOrientation(Matrix3 orientation)
     {
-        Orientation = orientation;
+        Orientation = orientation.Orthonormalized();
         ApplyOrientation();
     }
 

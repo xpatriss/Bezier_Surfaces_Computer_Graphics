@@ -3,4 +3,7 @@
     <Project Path="src/BezierSurfaces.App/BezierSurfaces.App.csproj" />
     <Project Path="src/BezierSurfaces.Core/BezierSurfaces.Core.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BezierSurfaces.Checks/BezierSurfaces.Checks.csproj" />
+  </Folder>
 </Solution>

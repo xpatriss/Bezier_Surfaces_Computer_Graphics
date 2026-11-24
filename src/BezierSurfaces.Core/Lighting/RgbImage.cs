@@ -1,3 +1,5 @@
+using System.Numerics;
+
 namespace BezierSurfaces.Core.Lighting;
 
 /// obraz w liczbach 0–1, wiersz 0 pliku jest u góry
@@ -42,12 +44,19 @@ public sealed class RgbImage
     }
 
     /// zamienia kolor mapy normalnych z zakresu 0–1 na wektor od −1 do 1
-    public static Vector3Color DecodeNormal(Vector3Color encoded)
+    public static Vector3 DecodeNormal(Vector3Color encoded)
     {
-        return new Vector3Color(
-            encoded.R * 2f - 1f,
-            encoded.G * 2f - 1f,
+        var normal = new Vector3(
+            DecodeNormalAxis(encoded.R),
+            DecodeNormalAxis(encoded.G),
             encoded.B * 2f - 1f);
+        return VectorMath.NormalizeOrZero(normal);
+    }
+
+    private static float DecodeNormalAxis(float channel)
+    {
+        // wartość neutralna wypada między dwoma poziomami 8-bitowego obrazu
+        return channel >= 127f / 255f && channel <= 128f / 255f ? 0f : channel * 2f - 1f;
     }
 
     /// bierze trzy kanały piksela o kolumnie x i wierszu y
