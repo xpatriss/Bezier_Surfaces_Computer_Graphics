@@ -3,8 +3,10 @@ using BezierSurfaces.Core.Model;
 
 namespace BezierSurfaces.Core.Files;
 
+/// czyta z pliku tekstowego siatki punktów kontrolnych
 public static class SurfaceFileReader
 {
+    /// składa kolejne grupy 16 punktów w osobne siatki
     public static List<ControlGrid> Read(string path)
     {
         var values = new List<float>();
@@ -57,6 +59,7 @@ public static class SurfaceFileReader
         return grids;
     }
 
+    /// zamienia tekst z wiersza pliku na liczbę
     private static float Parse(string text, int lineNumber)
     {
         if (!float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out float value))

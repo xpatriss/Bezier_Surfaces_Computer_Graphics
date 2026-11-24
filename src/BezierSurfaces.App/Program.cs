@@ -2,7 +2,7 @@ namespace BezierSurfaces.App;
 
 internal static class Program
 {
-    // punkt startowy aplikacji
+    /// uruchamia okno aplikacji
     [STAThread]
     private static void Main()
     {

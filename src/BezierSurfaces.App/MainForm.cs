@@ -1,4 +1,5 @@
 using System.Numerics;
+using BezierSurfaces.Core.Bezier;
 using BezierSurfaces.Core.Files;
 using BezierSurfaces.Core.Geometry;
 using BezierSurfaces.Core.Model;
@@ -6,12 +7,17 @@ using BezierSurfaces.Core.Model;
 namespace BezierSurfaces.App;
 
 // główne okno
-// na tym etapie rysuje wieloboki kontrolne, bez obrotu i bez siatki trójkątów
+// rysuje wielobok kontrolny i linie stałego u oraz v na powierzchni
 public sealed class MainForm : Form
 {
     private readonly Scene _scene = new();
     private readonly PictureBox _drawing = new();
 
+    // ile linii w każdym kierunku i z ilu odcinków składa się jedna linia
+    private const int ParameterLineCount = 8;
+    private const int SamplesPerLine = 24;
+
+    /// ustawia okno i wczytuje powierzchnie
     public MainForm()
     {
         Text = "Powierzchnie Béziera";
@@ -30,6 +36,7 @@ public sealed class MainForm : Form
         LoadSurfaces();
     }
 
+    /// czyta plik startowy i dokłada siatki do sceny
     private void LoadSurfaces()
     {
         string path = Path.Combine(AppContext.BaseDirectory, "data", "surfaces.txt");
@@ -46,6 +53,7 @@ public sealed class MainForm : Form
         }
     }
 
+    /// rysuje osie, linie powierzchni i wieloboki kontrolne
     private void OnPaint(object? sender, PaintEventArgs e)
     {
         int width = _drawing.ClientSize.Width;
@@ -59,11 +67,54 @@ public sealed class MainForm : Form
         DrawAxes(e.Graphics, map);
         for (int index = 0; index < _scene.Surfaces.Count; index++)
         {
-            DrawControlPolygon(e.Graphics, map, _scene.Surfaces[index].ControlPoints, ColorFor(index));
+            ControlGrid grid = _scene.Surfaces[index].ControlPoints;
+            DrawParameterLines(e.Graphics, map, grid, CurveColorFor(index));
+            DrawControlPolygon(e.Graphics, map, grid, ColorFor(index));
         }
     }
 
-    // szary krzyż pokazuje, że (0, 0) leży w środku obszaru
+    /// rysuje linie stałego u i stałego v, złożone z punktów powierzchni
+    private static void DrawParameterLines(Graphics graphics, ScreenMap map, ControlGrid grid, Color color)
+    {
+        using var pen = new Pen(color, 1.2f);
+        for (int line = 0; line <= ParameterLineCount; line++)
+        {
+            float fixedParameter = line / (float)ParameterLineCount;
+            DrawCurve(graphics, pen, map, grid, fixedParameter, constantU: true);
+            DrawCurve(graphics, pen, map, grid, fixedParameter, constantU: false);
+        }
+    }
+
+    /// idzie wzdłuż jednej linii parametru i łączy kolejne punkty odcinkami
+    private static void DrawCurve(
+        Graphics graphics,
+        Pen pen,
+        ScreenMap map,
+        ControlGrid grid,
+        float fixedParameter,
+        bool constantU)
+    {
+        Vector3 previous = Sample(grid, fixedParameter, 0f, constantU);
+        for (int sample = 1; sample <= SamplesPerLine; sample++)
+        {
+            float moving = sample / (float)SamplesPerLine;
+            Vector3 next = Sample(grid, fixedParameter, moving, constantU);
+            DrawSegment(graphics, pen, map, previous, next);
+            previous = next;
+        }
+    }
+
+    /// bierze punkt płata przy ustalonym u albo przy ustalonym v
+    private static Vector3 Sample(ControlGrid grid, float fixedParameter, float movingParameter, bool constantU)
+    {
+        if (constantU)
+        {
+            return BezierPatch.Point(grid, fixedParameter, movingParameter);
+        }
+
+        return BezierPatch.Point(grid, movingParameter, fixedParameter);
+    }
+    /// rysuje szary krzyż osi przez środek okna
     private static void DrawAxes(Graphics graphics, ScreenMap map)
     {
         using var pen = new Pen(Color.FromArgb(180, 190, 190, 190), 1f);
@@ -71,6 +122,7 @@ public sealed class MainForm : Form
         graphics.DrawLine(pen, map.CenterX, 0, map.CenterX, map.Height);
     }
 
+    /// łączy sąsiednie punkty kontrolne i zaznacza same punkty
     private static void DrawControlPolygon(Graphics graphics, ScreenMap map, ControlGrid grid, Color color)
     {
         using var pen = new Pen(color, 1.6f);
@@ -101,6 +153,7 @@ public sealed class MainForm : Form
         }
     }
 
+    /// rysuje jeden odcinek między dwoma punktami sceny
     // rzut prostokątny: do rysowania bierzemy x i y, z zostaje w punkcie
     private static void DrawSegment(Graphics graphics, Pen pen, ScreenMap map, Vector3 start, Vector3 end)
     {
@@ -109,6 +162,13 @@ public sealed class MainForm : Form
         graphics.DrawLine(pen, a.X, a.Y, b.X, b.Y);
     }
 
+    /// wybiera jaśniejszy kolor linii powierzchni
+    private static Color CurveColorFor(int surfaceIndex)
+    {
+        return surfaceIndex % 2 == 0 ? Color.SeaGreen : Color.RoyalBlue;
+    }
+
+    /// wybiera kolor wieloboku: zielony dla pierwszej powierzchni, niebieski dla drugiej
     private static Color ColorFor(int surfaceIndex)
     {
         return surfaceIndex % 2 == 0 ? Color.DarkGreen : Color.DarkBlue;
