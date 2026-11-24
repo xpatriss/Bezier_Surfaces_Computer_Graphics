@@ -51,7 +51,6 @@ public sealed class MainForm : Form
     private readonly RadioButton _textureRadio = new() { Text = "Tekstura" };
     private readonly Button _resetButton = new() { Text = "Widok z góry" };
     private readonly Button _objectColorButton = new() { Text = "Kolor obiektu" };
-    private readonly Button _textureButton = new() { Text = "Wczytaj teksturę" };
     private readonly Button _normalButton = new() { Text = "Wczytaj mapę" };
     private readonly Button _lightColorButton = new() { Text = "Kolor światła" };
     private readonly Button _helpButton = new() { Text = "Pomoc" };
@@ -156,7 +155,6 @@ public sealed class MainForm : Form
         _surfaceList.BackColor = PageColor;
         StyleFlat(_resetButton);
         StyleFlat(_objectColorButton);
-        StyleFlat(_textureButton);
         StyleFlat(_normalButton);
         StyleFlat(_lightColorButton);
         StyleFlat(_helpButton);
@@ -193,7 +191,6 @@ public sealed class MainForm : Form
         AddRow(materialTab, _solidRadio);
         AddRow(materialTab, _objectColorButton);
         AddRow(materialTab, _textureRadio);
-        AddRow(materialTab, _textureButton);
         AddRow(materialTab, _normalMapBox);
         AddRow(materialTab, _normalButton);
         FitStack(viewTab);
@@ -259,7 +256,6 @@ public sealed class MainForm : Form
         _solidRadio.CheckedChanged += (_, _) => ApplyColorMode();
         _textureRadio.CheckedChanged += (_, _) => ApplyColorMode();
         _objectColorButton.Click += (_, _) => ChooseObjectColor();
-        _textureButton.Click += (_, _) => LoadTexture();
         _normalMapBox.CheckedChanged += (_, _) =>
         {
             _scene.UseNormalMap = _normalMapBox.Checked;
@@ -533,58 +529,29 @@ public sealed class MainForm : Form
         _drawing.Invalidate();
     }
 
-    /// wczytuje obraz jako teksturę wybranej powierzchni
-    private void LoadTexture()
-    {
-        if (_selectedSurface >= _scene.Surfaces.Count)
-        {
-            return;
-        }
-
-        RgbImage? texture = ChooseImage("Tekstura");
-        if (texture is null)
-        {
-            return;
-        }
-
-        _scene.Surfaces[_selectedSurface].Appearance.Texture = texture;
-        _textureRadio.Checked = true;
-        _drawing.Invalidate();
-    }
-
     /// podmienia wspólną mapę normalnych i ją włącza
     private void LoadNormalMap()
     {
-        RgbImage? map = ChooseImage("Mapa normalnych", normalMap: true);
-        if (map is null)
-        {
-            return;
-        }
-
-        _scene.NormalMap = map;
-        _normalMapBox.Checked = true;
-        _drawing.Invalidate();
-    }
-
-    private RgbImage? ChooseImage(string title, bool normalMap = false)
-    {
-        using var dialog = new OpenFileDialog { Title = title, Filter = "Obrazy|*.png;*.jpg;*.jpeg;*.bmp" };
+        using var dialog = new OpenFileDialog { Title = "Mapa normalnych", Filter = "Obrazy|*.png;*.jpg;*.jpeg;*.bmp" };
         if (dialog.ShowDialog(this) != DialogResult.OK)
         {
-            return null;
+            return;
         }
 
         try
         {
-            return BitmapImages.Load(dialog.FileName, normalMap);
+            _scene.NormalMap = BitmapImages.LoadNormalMap(dialog.FileName);
         }
         catch (Exception exception) when (exception is ArgumentException or IOException or InvalidDataException or UnauthorizedAccessException
             or System.Runtime.InteropServices.ExternalException or OutOfMemoryException or OverflowException)
         {
             MessageBox.Show(this, $"Nie udało się wczytać obrazu.\n{exception.Message}",
-                title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return null;
+                dialog.Title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
         }
+
+        _normalMapBox.Checked = true;
+        _drawing.Invalidate();
     }
 
     private static void ShowColor(Button button, Color color)

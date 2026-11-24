@@ -18,8 +18,9 @@ static class HelpText
         przyciskiem, żeby zmienić krzywą na płaszczyźnie stałego z.
         Suwak z przesuwa całą krzywą. Pole „Animuj światło” rusza punkt po krzywej.
         Kliknięcie powierzchni wybiera ją w zakładce „Materiał”.
-        Można też wybrać powierzchnię z listy i ustawić osobny kolor lub obraz.
-        Pole „Mapa normalnych” ugina normalną według obrazu, bez ruszania siatki.
+        Dla każdego płata można wybrać jednolity kolor lub domyślną teksturę.
+        Przycisk „Wczytaj mapę” pozwala wybrać plik mapy normalnych.
+        Pole „Mapa normalnych” włącza wpływ tej mapy na oświetlenie.
 
         Skróty
         F1 — ta pomoc

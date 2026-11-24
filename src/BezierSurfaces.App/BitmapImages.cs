@@ -2,11 +2,11 @@ using BezierSurfaces.Core.Lighting;
 
 namespace BezierSurfaces.App;
 
-/// czyta plik obrazu do liczb 0–1 i zamienia kolor sceny na kolor okna
+/// czyta mapę normalnych i zamienia kolor sceny na kolor okna
 static class BitmapImages
 {
     /// ładuje png, jpg albo bmp i odkłada kanały wierszami od góry
-    public static RgbImage Load(string path, bool normalMap = false)
+    public static RgbImage LoadNormalMap(string path)
     {
         using var bitmap = new Bitmap(path);
         int width = bitmap.Width;
@@ -17,7 +17,7 @@ static class BitmapImages
             for (int x = 0; x < width; x++)
             {
                 Color color = bitmap.GetPixel(x, y);
-                if (normalMap && color.B < 128)
+                if (color.B < 128)
                 {
                     throw new InvalidDataException("Niebieski kanał mapy normalnych musi mieścić się w zakresie 128–255.");
                 }
