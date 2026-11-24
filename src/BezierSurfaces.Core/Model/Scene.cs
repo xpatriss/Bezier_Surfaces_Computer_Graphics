@@ -32,6 +32,10 @@ public sealed class Scene
 
     public float Shininess { get; set; } = 24f;
 
+    public bool UseNormalMap { get; set; }
+
+    public RgbImage? NormalMap { get; set; }
+
     // ile odcinków ma przedział od 0 do 1 w każdym kierunku
     public int Divisions { get; set; } = 8;
 
@@ -51,7 +55,7 @@ public sealed class Scene
 
     /// mnoży punkty i styczne przez aktualną macierz, normalną skraca do długości 1
     // punkty kontrolne zostają w pliku, obrót jest tylko przy rysowaniu
-    // styczne kręcą się jak kierunki, bez dzielenia przez długość, bo mapa normalnych przyjdzie później
+    // styczne kręcą się jak kierunki, długość 1 dostają dopiero przy mapie normalnych
     public void ApplyOrientation()
     {
         foreach (MeshVertex vertex in Mesh.Vertices)

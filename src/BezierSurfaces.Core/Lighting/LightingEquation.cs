@@ -49,6 +49,23 @@ public static class LightingEquation
         return Clamp01(diffusePart + specularPart);
     }
 
+    /// składa normalną z mapy w układ stycznych płata
+    // kolumny macierzy to pu, pv i normalna powierzchni, już po obrocie
+    public static Vector3 ApplyNormalMap(Vector3 tangentU, Vector3 tangentV, Vector3 surfaceNormal, Vector3Color textureNormal)
+    {
+        Vector3 t = VectorMath.NormalizeOrZero(tangentU);
+        Vector3 b = VectorMath.NormalizeOrZero(tangentV);
+        Vector3 n = VectorMath.NormalizeOrZero(surfaceNormal);
+        if (t == Vector3.Zero || b == Vector3.Zero || n == Vector3.Zero)
+        {
+            return n;
+        }
+
+        Vector3 mapped = t * textureNormal.R + b * textureNormal.G + n * textureNormal.B;
+        Vector3 normalized = VectorMath.NormalizeOrZero(mapped);
+        return normalized == Vector3.Zero ? n : normalized;
+    }
+
     /// zamienia kolor 0–1 na piksel aarrggbb
     public static int ToBgra(Vector3Color color)
     {

@@ -20,9 +20,11 @@ public sealed class MainForm : Form
     private readonly FrameBuffer _frame = new();
     private readonly System.Windows.Forms.Timer _clock = new();
     private Bitmap? _bitmap;
+    private bool _updatingUi;
     private bool _turning;
     private bool _draggingLight;
     private int _lightPointIndex = -1;
+    private int _selectedSurface;
     private Point _lastMouse;
     private readonly CheckBox _polygonsBox = new() { Text = "Wielobok kontrolny", Checked = true };
     private readonly CheckBox _meshBox = new() { Text = "Siatka trójkątów", Checked = true };
@@ -45,7 +47,16 @@ public sealed class MainForm : Form
     private readonly TrackBar _lightZBar = new() { Minimum = -200, Maximum = 200, Value = 100, TickStyle = TickStyle.None, AutoSize = true };
     private readonly Label _lightZLabel = new() { AutoSize = true };
     private readonly CheckBox _animateBox = new() { Text = "Animuj światło" };
+    private readonly CheckBox _normalMapBox = new() { Text = "Mapa normalnych" };
+    private readonly ComboBox _surfaceList = new() { DropDownStyle = ComboBoxStyle.DropDownList };
+    private readonly RadioButton _solidRadio = new() { Text = "Kolor jednolity", Checked = true };
+    private readonly RadioButton _textureRadio = new() { Text = "Tekstura" };
     private readonly Button _resetButton = new() { Text = "Widok z góry" };
+    private readonly Button _objectColorButton = new() { Text = "Kolor obiektu" };
+    private readonly Button _textureButton = new() { Text = "Wczytaj teksturę" };
+    private readonly Button _normalButton = new() { Text = "Wczytaj mapę" };
+    private readonly Button _lightColorButton = new() { Text = "Kolor światła" };
+    private readonly Button _helpButton = new() { Text = "Pomoc" };
 
     private static readonly Color PageColor = Color.White;
     private static readonly Color PanelColor = Color.FromArgb(243, 244, 246);
@@ -131,17 +142,19 @@ public sealed class MainForm : Form
         StyleOption(_meshBox);
         StyleOption(_filledBox);
         StyleOption(_animateBox);
-        _resetButton.Font = Font;
-        _resetButton.FlatStyle = FlatStyle.Flat;
-        _resetButton.BackColor = PageColor;
-        _resetButton.ForeColor = InkColor;
-        _resetButton.TextAlign = ContentAlignment.MiddleCenter;
-        _resetButton.Padding = new Padding(8, 10, 8, 14);
-        _resetButton.Height = ButtonHeight(_resetButton);
-        _resetButton.FlatAppearance.BorderColor = LineColor;
-        _resetButton.FlatAppearance.BorderSize = 1;
+        StyleOption(_normalMapBox);
+        StyleOption(_solidRadio);
+        StyleOption(_textureRadio);
+        _surfaceList.Font = Font;
+        _surfaceList.BackColor = PageColor;
+        StyleFlat(_resetButton);
+        StyleFlat(_objectColorButton);
+        StyleFlat(_textureButton);
+        StyleFlat(_normalButton);
+        StyleFlat(_lightColorButton);
+        StyleFlat(_helpButton);
 
-        var hint = Hint("Lewy przycisk przechyla. Prawy kręci w płaszczyźnie ekranu. Pomarańczowe punkty da się ciągnąć. Spacja włącza animację.");
+        var hint = Hint("Lewy przycisk przechyla. Prawy kręci w płaszczyźnie ekranu. Pomarańczowe punkty da się ciągnąć. Spacja włącza animację. F1 otwiera pomoc.");
         AddRow(stack, Heading("Dokładność siatki"));
         AddRow(stack, _divisionsLabel);
         AddRow(stack, _divisionsBar);
@@ -161,7 +174,19 @@ public sealed class MainForm : Form
         AddRow(stack, _lightZLabel);
         AddRow(stack, _lightZBar);
         AddRow(stack, _animateBox);
+        AddRow(stack, _lightColorButton);
         AddRow(stack, _resetButton);
+        AddRow(stack, Rule());
+        AddRow(stack, Heading("Powierzchnia"));
+        AddRow(stack, _surfaceList);
+        AddRow(stack, _solidRadio);
+        AddRow(stack, _textureRadio);
+        AddRow(stack, _objectColorButton);
+        AddRow(stack, _textureButton);
+        AddRow(stack, Rule());
+        AddRow(stack, _normalMapBox);
+        AddRow(stack, _normalButton);
+        AddRow(stack, _helpButton);
         AddRow(stack, Rule());
         AddRow(stack, hint);
         panel.Resize += (_, _) => FitStack(stack, hint);
@@ -215,6 +240,40 @@ public sealed class MainForm : Form
             _scene.ReplaceOrientation(Matrix3.Identity);
             _drawing.Invalidate();
         };
+        _surfaceList.SelectedIndexChanged += (_, _) =>
+        {
+            if (_surfaceList.SelectedIndex >= 0)
+            {
+                _selectedSurface = _surfaceList.SelectedIndex;
+                ShowSelectedAppearance();
+            }
+        };
+        _solidRadio.CheckedChanged += (_, _) => ApplyColorMode();
+        _textureRadio.CheckedChanged += (_, _) => ApplyColorMode();
+        _objectColorButton.Click += (_, _) => ChooseObjectColor();
+        _textureButton.Click += (_, _) => LoadTexture();
+        _normalMapBox.CheckedChanged += (_, _) =>
+        {
+            _scene.UseNormalMap = _normalMapBox.Checked;
+            _drawing.Invalidate();
+        };
+        _normalButton.Click += (_, _) => LoadNormalMap();
+        _lightColorButton.Click += (_, _) => ChooseLightColor();
+        _helpButton.Click += (_, _) => ShowHelp();
+    }
+
+    /// płaski biały przycisk z szarą ramką i zapasem pod ogonki
+    private static void StyleFlat(Button button)
+    {
+        button.Font = new Font("Segoe UI", 10f);
+        button.FlatStyle = FlatStyle.Flat;
+        button.BackColor = PageColor;
+        button.ForeColor = InkColor;
+        button.TextAlign = ContentAlignment.MiddleCenter;
+        button.Padding = new Padding(8, 10, 8, 14);
+        button.Height = ButtonHeight(button);
+        button.FlatAppearance.BorderColor = LineColor;
+        button.FlatAppearance.BorderSize = 1;
     }
 
     /// dokłada kontrolkę pod poprzednią, z odstępem
@@ -289,8 +348,8 @@ public sealed class MainForm : Form
         return new Panel { BackColor = LineColor, Height = 1 };
     }
 
-    /// ustawia pole wyboru na kolor panelu
-    private static void StyleOption(CheckBox box)
+    /// ustawia pole wyboru albo radio na kolor panelu
+    private static void StyleOption(ButtonBase box)
     {
         box.BackColor = PanelColor;
         box.ForeColor = InkColor;
@@ -335,6 +394,17 @@ public sealed class MainForm : Form
         {
             _animateBox.Checked = !_animateBox.Checked;
         }
+        else if (e.KeyCode == Keys.F1)
+        {
+            ShowHelp();
+        }
+    }
+
+    /// pokazuje instrukcję w osobnym oknie
+    private void ShowHelp()
+    {
+        using var help = new HelpForm();
+        help.ShowDialog(this);
     }
 
     /// wpisuje na pasek, na ile części podzielony jest przedział 0–1
@@ -357,13 +427,124 @@ public sealed class MainForm : Form
             };
             for (int index = 0; index < grids.Count; index++)
             {
-                _scene.Surfaces.Add(new BezierSurface(grids[index], colors[index % colors.Length]));
+                var appearance = new SurfaceAppearance
+                {
+                    SolidColor = colors[index % colors.Length],
+                    Texture = DefaultImages.BrickColor
+                };
+                _scene.Surfaces.Add(new BezierSurface(grids[index], appearance));
+                _surfaceList.Items.Add($"Powierzchnia {index + 1}");
             }
         }
         catch (Exception exception)
         {
             MessageBox.Show(this, exception.Message, "Plik powierzchni");
         }
+
+        _scene.NormalMap = DefaultImages.BrickNormal;
+        _lightColorButton.BackColor = BitmapImages.ToMedia(_scene.LightColor);
+        if (_surfaceList.Items.Count > 0)
+        {
+            _surfaceList.SelectedIndex = 0;
+        }
+
+        ShowSelectedAppearance();
+    }
+
+    /// ustawia radio i tło przycisku według wybranej powierzchni
+    private void ShowSelectedAppearance()
+    {
+        if (_selectedSurface < 0 || _selectedSurface >= _scene.Surfaces.Count)
+        {
+            return;
+        }
+
+        SurfaceAppearance appearance = _scene.Surfaces[_selectedSurface].Appearance;
+        _updatingUi = true;
+        _solidRadio.Checked = !appearance.UseTexture;
+        _textureRadio.Checked = appearance.UseTexture;
+        _objectColorButton.BackColor = BitmapImages.ToMedia(appearance.SolidColor);
+        _updatingUi = false;
+    }
+
+    /// przełącza wybraną powierzchnię między kolorem a teksturą
+    private void ApplyColorMode()
+    {
+        if (_updatingUi || _selectedSurface >= _scene.Surfaces.Count)
+        {
+            return;
+        }
+
+        _scene.Surfaces[_selectedSurface].Appearance.UseTexture = _textureRadio.Checked;
+        _drawing.Invalidate();
+    }
+
+    /// zmienia kolor światła il
+    private void ChooseLightColor()
+    {
+        using var dialog = new ColorDialog { Color = _lightColorButton.BackColor, FullOpen = true };
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        _scene.LightColor = new Vector3Color(dialog.Color.R / 255f, dialog.Color.G / 255f, dialog.Color.B / 255f);
+        _lightColorButton.BackColor = dialog.Color;
+        _drawing.Invalidate();
+    }
+
+    /// zmienia jednolity kolor wybranej powierzchni i wyłącza teksturę
+    private void ChooseObjectColor()
+    {
+        if (_selectedSurface >= _scene.Surfaces.Count)
+        {
+            return;
+        }
+
+        using var dialog = new ColorDialog { Color = _objectColorButton.BackColor, FullOpen = true };
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        _scene.Surfaces[_selectedSurface].Appearance.SolidColor =
+            new Vector3Color(dialog.Color.R / 255f, dialog.Color.G / 255f, dialog.Color.B / 255f);
+        _objectColorButton.BackColor = dialog.Color;
+        _solidRadio.Checked = true;
+        _drawing.Invalidate();
+    }
+
+    /// wczytuje obraz jako teksturę wybranej powierzchni
+    private void LoadTexture()
+    {
+        if (_selectedSurface >= _scene.Surfaces.Count)
+        {
+            return;
+        }
+
+        using var dialog = new OpenFileDialog { Filter = "Obrazy|*.png;*.jpg;*.jpeg;*.bmp" };
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        _scene.Surfaces[_selectedSurface].Appearance.Texture = BitmapImages.Load(dialog.FileName);
+        _textureRadio.Checked = true;
+        _drawing.Invalidate();
+    }
+
+    /// podmienia wspólną mapę normalnych i ją włącza
+    private void LoadNormalMap()
+    {
+        using var dialog = new OpenFileDialog { Filter = "Obrazy|*.png;*.jpg;*.jpeg;*.bmp" };
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        _scene.NormalMap = BitmapImages.Load(dialog.FileName);
+        _normalMapBox.Checked = true;
+        _drawing.Invalidate();
     }
 
     /// rysuje osie, trójkąty płata i wieloboki kontrolne
@@ -501,6 +682,12 @@ public sealed class MainForm : Form
             _draggingLight = true;
             _drawing.Capture = true;
             return;
+        }
+
+        int? surface = SurfacePicker.FrontSurface(_scene.Mesh, map, e.X, e.Y);
+        if (surface is int index && index < _surfaceList.Items.Count)
+        {
+            _surfaceList.SelectedIndex = index;
         }
 
         _turning = true;
