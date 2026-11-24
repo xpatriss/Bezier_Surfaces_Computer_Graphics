@@ -3,6 +3,7 @@ using System.Drawing.Imaging;
 using System.Numerics;
 using BezierSurfaces.Core.Files;
 using BezierSurfaces.Core.Geometry;
+using BezierSurfaces.Core.Lighting;
 using BezierSurfaces.Core.Model;
 using BezierSurfaces.Core.Raster;
 
@@ -31,6 +32,12 @@ public sealed class MainForm : Form
         TickStyle = TickStyle.None
     };
     private readonly Label _divisionsLabel = new();
+    private readonly Label _diffuseLabel = new() { AutoSize = true };
+    private readonly Label _specularLabel = new() { AutoSize = true };
+    private readonly Label _shininessLabel = new() { AutoSize = true };
+    private readonly TrackBar _diffuseBar = new() { Minimum = 0, Maximum = 100, Value = 75, TickStyle = TickStyle.None, AutoSize = true };
+    private readonly TrackBar _specularBar = new() { Minimum = 0, Maximum = 100, Value = 35, TickStyle = TickStyle.None, AutoSize = true };
+    private readonly TrackBar _shininessBar = new() { Minimum = 1, Maximum = 100, Value = 24, TickStyle = TickStyle.None, AutoSize = true };
     private readonly Button _resetButton = new() { Text = "Widok z góry" };
 
     private static readonly Color PageColor = Color.White;
@@ -53,6 +60,7 @@ public sealed class MainForm : Form
         BuildLayout();
         LoadSurfaces();
         _scene.Divisions = _divisionsBar.Value;
+        ApplyShadingFromUi();
         _scene.RebuildMesh();
         RefreshDivisionLabel();
     }
@@ -67,7 +75,7 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             FlowDirection = FlowDirection.TopDown,
             WrapContents = false,
-            AutoScroll = false,
+            AutoScroll = true,
             BackColor = PanelColor,
             Padding = new Padding(16, 16, 16, 16)
         };
@@ -93,8 +101,17 @@ public sealed class MainForm : Form
         _divisionsLabel.ForeColor = MutedColor;
         _divisionsLabel.BackColor = PanelColor;
         _divisionsLabel.AutoSize = true;
+        _diffuseLabel.ForeColor = MutedColor;
+        _diffuseLabel.BackColor = PanelColor;
+        _specularLabel.ForeColor = MutedColor;
+        _specularLabel.BackColor = PanelColor;
+        _shininessLabel.ForeColor = MutedColor;
+        _shininessLabel.BackColor = PanelColor;
         _divisionsBar.BackColor = PanelColor;
         _divisionsBar.AutoSize = true;
+        _diffuseBar.BackColor = PanelColor;
+        _specularBar.BackColor = PanelColor;
+        _shininessBar.BackColor = PanelColor;
         StyleOption(_polygonsBox);
         StyleOption(_meshBox);
         StyleOption(_filledBox);
@@ -117,6 +134,14 @@ public sealed class MainForm : Form
         AddRow(stack, _polygonsBox);
         AddRow(stack, _meshBox);
         AddRow(stack, _filledBox);
+        AddRow(stack, Rule());
+        AddRow(stack, Heading("Światło"));
+        AddRow(stack, _diffuseLabel);
+        AddRow(stack, _diffuseBar);
+        AddRow(stack, _specularLabel);
+        AddRow(stack, _specularBar);
+        AddRow(stack, _shininessLabel);
+        AddRow(stack, _shininessBar);
         AddRow(stack, _resetButton);
         AddRow(stack, Rule());
         AddRow(stack, hint);
@@ -143,6 +168,21 @@ public sealed class MainForm : Form
         _filledBox.CheckedChanged += (_, _) =>
         {
             _scene.Draw.FilledTriangles = _filledBox.Checked;
+            _drawing.Invalidate();
+        };
+        _diffuseBar.ValueChanged += (_, _) =>
+        {
+            ApplyShadingFromUi();
+            _drawing.Invalidate();
+        };
+        _specularBar.ValueChanged += (_, _) =>
+        {
+            ApplyShadingFromUi();
+            _drawing.Invalidate();
+        };
+        _shininessBar.ValueChanged += (_, _) =>
+        {
+            ApplyShadingFromUi();
             _drawing.Invalidate();
         };
         _resetButton.Click += (_, _) =>
@@ -232,6 +272,17 @@ public sealed class MainForm : Form
         box.AutoSize = true;
     }
 
+    /// przepisuje suwaki kd, ks i m na scenę
+    private void ApplyShadingFromUi()
+    {
+        _scene.DiffuseWeight = _diffuseBar.Value / 100f;
+        _scene.SpecularWeight = _specularBar.Value / 100f;
+        _scene.Shininess = _shininessBar.Value;
+        _diffuseLabel.Text = $"kd: {_scene.DiffuseWeight:0.00}";
+        _specularLabel.Text = $"ks: {_scene.SpecularWeight:0.00}";
+        _shininessLabel.Text = $"m: {_shininessBar.Value}";
+    }
+
     /// wpisuje na pasek, na ile części podzielony jest przedział 0–1
     private void RefreshDivisionLabel()
     {
@@ -244,9 +295,15 @@ public sealed class MainForm : Form
         string path = Path.Combine(AppContext.BaseDirectory, "data", "surfaces.txt");
         try
         {
-            foreach (ControlGrid grid in SurfaceFileReader.Read(path))
+            List<ControlGrid> grids = SurfaceFileReader.Read(path);
+            var colors = new[]
             {
-                _scene.Surfaces.Add(new BezierSurface(grid));
+                new Vector3Color(0.22f, 0.55f, 0.38f),
+                new Vector3Color(0.25f, 0.40f, 0.75f)
+            };
+            for (int index = 0; index < grids.Count; index++)
+            {
+                _scene.Surfaces.Add(new BezierSurface(grids[index], colors[index % colors.Length]));
             }
         }
         catch (Exception exception)
@@ -293,12 +350,12 @@ public sealed class MainForm : Form
     }
 
     /// wypełnia trójkąty do bitmapy i kładzie ją pod liniami
-    // kolor jest stały na trójkąt, o wygranej pikselu decyduje większe z
+    // kolor liczy wzór światła w każdym pikselu, o wygranej decyduje większe z
     private void DrawFilled(Graphics graphics, ScreenMap map, int width, int height)
     {
         _frame.Resize(width, height);
         _frame.Clear(unchecked((int)0xFFFFFFFF));
-        _rasterizer.DrawMesh(_scene, map, _frame, unchecked((int)0xFF5EAE80), unchecked((int)0xFF5A82D2));
+        _rasterizer.DrawMesh(_scene, map, _frame, _scene.LightPosition);
         if (_bitmap is null || _bitmap.Width != width || _bitmap.Height != height)
         {
             _bitmap?.Dispose();

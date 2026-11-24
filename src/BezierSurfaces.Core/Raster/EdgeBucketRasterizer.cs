@@ -1,5 +1,6 @@
 using System.Numerics;
 using BezierSurfaces.Core.Geometry;
+using BezierSurfaces.Core.Lighting;
 using BezierSurfaces.Core.Model;
 
 namespace BezierSurfaces.Core.Raster;
@@ -29,19 +30,19 @@ public sealed class EdgeBucketRasterizer
         _usedRows.Clear();
     }
 
-    /// wypełnia wszystkie trójkąty sceny jednym kolorem na powierzchnię
-    public void DrawMesh(Scene scene, ScreenMap map, FrameBuffer frame, int firstColor, int secondColor)
+    /// wypełnia trójkąty kolorem licznym osobno w każdym pikselu
+    public void DrawMesh(Scene scene, ScreenMap map, FrameBuffer frame, Vector3 lightPosition)
     {
         EnsureHeight(frame.Height);
+        var shader = new FragmentShader { Scene = scene, LightPosition = lightPosition };
         foreach (MeshTriangle triangle in scene.Mesh.Triangles)
         {
-            int color = triangle.SurfaceIndex % 2 == 0 ? firstColor : secondColor;
-            DrawTriangle(triangle, map, frame, color);
+            DrawTriangle(triangle, map, frame, shader);
         }
     }
 
     /// wkłada trzy krawędzie do kubełków i maluje kolejne wiersze
-    public void DrawTriangle(MeshTriangle triangle, ScreenMap map, FrameBuffer frame, int color)
+    public void DrawTriangle(MeshTriangle triangle, ScreenMap map, FrameBuffer frame, FragmentShader shader)
     {
         Vector2 a = map.ToScreen(triangle.A.PositionView);
         Vector2 b = map.ToScreen(triangle.B.PositionView);
@@ -86,7 +87,7 @@ public sealed class EdgeBucketRasterizer
             // krawędź kończy się na swoim górnym wierszu i nie maluje go drugi raz
             _active.RemoveAll(edge => edge.YEnd <= y);
             _active.Sort(static (left, right) => left.X.CompareTo(right.X));
-            FillPairs(triangle, a, b, c, area, y, frame, color);
+            FillPairs(triangle, a, b, c, area, y, frame, shader);
             foreach (ActiveEdge edge in _active)
             {
                 edge.X += edge.DxPerDy;
@@ -103,7 +104,7 @@ public sealed class EdgeBucketRasterizer
         float area,
         int y,
         FrameBuffer frame,
-        int color)
+        FragmentShader shader)
     {
         for (int pair = 0; pair + 1 < _active.Count; pair += 2)
         {
@@ -138,7 +139,7 @@ public sealed class EdgeBucketRasterizer
                     alpha * triangle.A.PositionView.Z +
                     beta * triangle.B.PositionView.Z +
                     gamma * triangle.C.PositionView.Z;
-                frame.WriteIfCloser(x, y, z, color);
+                frame.WriteIfCloser(x, y, z, LightingEquation.ToBgra(shader.Shade(triangle, alpha, beta, gamma)));
             }
         }
     }

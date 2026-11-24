@@ -1,3 +1,4 @@
+using System.Numerics;
 using BezierSurfaces.Core.Bezier;
 using BezierSurfaces.Core.Model;
 
@@ -37,6 +38,9 @@ public static class SurfaceMeshBuilder
                     u,
                     v,
                     surfaceIndex);
+                vertex.TangentU = BezierPatch.TangentU(surface.ControlPoints, u, v);
+                vertex.TangentV = BezierPatch.TangentV(surface.ControlPoints, u, v);
+                vertex.Normal = Vector3.Cross(vertex.TangentU, vertex.TangentV);
                 grid[row, column] = vertex;
                 mesh.Vertices.Add(vertex);
             }
