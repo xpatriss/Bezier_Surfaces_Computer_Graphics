@@ -1,5 +1,4 @@
 using System.Numerics;
-using BezierSurfaces.Core.Bezier;
 using BezierSurfaces.Core.Files;
 using BezierSurfaces.Core.Geometry;
 using BezierSurfaces.Core.Model;
@@ -7,33 +6,86 @@ using BezierSurfaces.Core.Model;
 namespace BezierSurfaces.App;
 
 // główne okno
-// rysuje wielobok kontrolny i linie stałego u oraz v na powierzchni
+// rysuje siatkę trójkątów na płachcie i wielobok kontrolny
 public sealed class MainForm : Form
 {
     private readonly Scene _scene = new();
     private readonly PictureBox _drawing = new();
+    private readonly CheckBox _polygonsBox = new() { Text = "Wielobok kontrolny", Checked = true };
+    private readonly CheckBox _meshBox = new() { Text = "Siatka trójkątów", Checked = true };
+    private readonly TrackBar _divisionsBar = new() { Minimum = 1, Maximum = 40, Value = 8, TickFrequency = 4 };
+    private readonly Label _divisionsLabel = new();
 
-    // ile linii w każdym kierunku i z ilu odcinków składa się jedna linia
-    private const int ParameterLineCount = 8;
-    private const int SamplesPerLine = 24;
-
-    /// ustawia okno i wczytuje powierzchnie
+    /// ustawia okno, wczytuje powierzchnie i tnie je na trójkąty
     public MainForm()
     {
         Text = "Powierzchnie Béziera";
-        ClientSize = new Size(1000, 700);
-        MinimumSize = new Size(640, 480);
+        ClientSize = new Size(1180, 700);
+        MinimumSize = new Size(860, 480);
         StartPosition = FormStartPosition.CenterScreen;
         AutoScaleMode = AutoScaleMode.Font;
 
+        BuildLayout();
+        LoadSurfaces();
+        _scene.Divisions = _divisionsBar.Value;
+        _scene.RebuildMesh();
+        RefreshDivisionLabel();
+    }
+
+    /// dokłada pasek z suwakiem obok obszaru rysowania
+    private void BuildLayout()
+    {
+        var panel = new Panel { Dock = DockStyle.Right, Width = 250 };
         _drawing.Name = "drawingSurface";
         _drawing.Dock = DockStyle.Fill;
         _drawing.BackColor = Color.White;
         _drawing.Paint += OnPaint;
         _drawing.Resize += (_, _) => _drawing.Invalidate();
+        // najpierw obszar, potem pasek: pasek zabiera prawą krawędź, reszta zostaje dla rysunku
         Controls.Add(_drawing);
+        Controls.Add(panel);
 
-        LoadSurfaces();
+        int y = 12;
+        Add(panel, new Label { Text = "Dokładność siatki" }, ref y, 22);
+        Add(panel, _divisionsLabel, ref y, 22);
+        Add(panel, _divisionsBar, ref y, 42);
+        Add(panel, _polygonsBox, ref y, 28);
+        Add(panel, _meshBox, ref y, 28);
+
+        _divisionsBar.ValueChanged += (_, _) =>
+        {
+            _scene.Divisions = _divisionsBar.Value;
+            RefreshDivisionLabel();
+            _scene.RebuildMesh();
+            _drawing.Invalidate();
+        };
+        _polygonsBox.CheckedChanged += (_, _) =>
+        {
+            _scene.Draw.ControlPolygons = _polygonsBox.Checked;
+            _drawing.Invalidate();
+        };
+        _meshBox.CheckedChanged += (_, _) =>
+        {
+            _scene.Draw.TriangleMesh = _meshBox.Checked;
+            _drawing.Invalidate();
+        };
+    }
+
+    /// ustawia kontrolkę w pasku i schodzi niżej
+    private static void Add(Panel panel, Control control, ref int y, int height)
+    {
+        control.Left = 12;
+        control.Top = y;
+        control.Width = 220;
+        control.Height = height;
+        panel.Controls.Add(control);
+        y += height + 6;
+    }
+
+    /// wpisuje na pasek, na ile części podzielony jest przedział 0–1
+    private void RefreshDivisionLabel()
+    {
+        _divisionsLabel.Text = $"Podział: {_divisionsBar.Value}";
     }
 
     /// czyta plik startowy i dokłada siatki do sceny
@@ -53,7 +105,7 @@ public sealed class MainForm : Form
         }
     }
 
-    /// rysuje osie, linie powierzchni i wieloboki kontrolne
+    /// rysuje osie, trójkąty płata i wieloboki kontrolne
     private void OnPaint(object? sender, PaintEventArgs e)
     {
         int width = _drawing.ClientSize.Width;
@@ -65,55 +117,34 @@ public sealed class MainForm : Form
 
         ScreenMap map = ScreenMap.Fit(width, height);
         DrawAxes(e.Graphics, map);
-        for (int index = 0; index < _scene.Surfaces.Count; index++)
+        if (_scene.Draw.TriangleMesh)
         {
-            ControlGrid grid = _scene.Surfaces[index].ControlPoints;
-            DrawParameterLines(e.Graphics, map, grid, CurveColorFor(index));
-            DrawControlPolygon(e.Graphics, map, grid, ColorFor(index));
+            DrawMesh(e.Graphics, map);
+        }
+
+        if (_scene.Draw.ControlPolygons)
+        {
+            for (int index = 0; index < _scene.Surfaces.Count; index++)
+            {
+                DrawControlPolygon(e.Graphics, map, _scene.Surfaces[index].ControlPoints, ColorFor(index));
+            }
         }
     }
 
-    /// rysuje linie stałego u i stałego v, złożone z punktów powierzchni
-    private static void DrawParameterLines(Graphics graphics, ScreenMap map, ControlGrid grid, Color color)
+    /// rysuje boki trójkątów leżących na płachcie
+    private void DrawMesh(Graphics graphics, ScreenMap map)
     {
-        using var pen = new Pen(color, 1.2f);
-        for (int line = 0; line <= ParameterLineCount; line++)
+        using var first = new Pen(CurveColorFor(0), 1f);
+        using var second = new Pen(CurveColorFor(1), 1f);
+        foreach (MeshTriangle triangle in _scene.Mesh.Triangles)
         {
-            float fixedParameter = line / (float)ParameterLineCount;
-            DrawCurve(graphics, pen, map, grid, fixedParameter, constantU: true);
-            DrawCurve(graphics, pen, map, grid, fixedParameter, constantU: false);
+            Pen pen = triangle.SurfaceIndex % 2 == 0 ? first : second;
+            DrawSegment(graphics, pen, map, triangle.A.Position, triangle.B.Position);
+            DrawSegment(graphics, pen, map, triangle.B.Position, triangle.C.Position);
+            DrawSegment(graphics, pen, map, triangle.C.Position, triangle.A.Position);
         }
     }
 
-    /// idzie wzdłuż jednej linii parametru i łączy kolejne punkty odcinkami
-    private static void DrawCurve(
-        Graphics graphics,
-        Pen pen,
-        ScreenMap map,
-        ControlGrid grid,
-        float fixedParameter,
-        bool constantU)
-    {
-        Vector3 previous = Sample(grid, fixedParameter, 0f, constantU);
-        for (int sample = 1; sample <= SamplesPerLine; sample++)
-        {
-            float moving = sample / (float)SamplesPerLine;
-            Vector3 next = Sample(grid, fixedParameter, moving, constantU);
-            DrawSegment(graphics, pen, map, previous, next);
-            previous = next;
-        }
-    }
-
-    /// bierze punkt płata przy ustalonym u albo przy ustalonym v
-    private static Vector3 Sample(ControlGrid grid, float fixedParameter, float movingParameter, bool constantU)
-    {
-        if (constantU)
-        {
-            return BezierPatch.Point(grid, fixedParameter, movingParameter);
-        }
-
-        return BezierPatch.Point(grid, movingParameter, fixedParameter);
-    }
     /// rysuje szary krzyż osi przez środek okna
     private static void DrawAxes(Graphics graphics, ScreenMap map)
     {
@@ -162,7 +193,7 @@ public sealed class MainForm : Form
         graphics.DrawLine(pen, a.X, a.Y, b.X, b.Y);
     }
 
-    /// wybiera jaśniejszy kolor linii powierzchni
+    /// wybiera jaśniejszy kolor boków trójkątów
     private static Color CurveColorFor(int surfaceIndex)
     {
         return surfaceIndex % 2 == 0 ? Color.SeaGreen : Color.RoyalBlue;
